@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LIS – Phòng XN Y Khoa</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div id="loading-bar"></div>
+
+  <!-- ============================ LOGIN ============================ -->
+  <section id="login-view">
+    <div class="login-art">
+      <div class="d-flex align-items-center gap-3">
+        <div class="brand-logo" data-logo></div>
+        <div><div class="fw-bold" data-clinic-name>PHÒNG XN Y KHOA</div><div class="small opacity-75" data-clinic-address></div></div>
+      </div>
+      <div>
+        <h1>Hệ thống quản lý xét nghiệm</h1>
+        <p>Tiếp nhận phiếu, nhập kết quả, theo dõi lịch sử chỉ số, nhắc tái khám và thống kê doanh thu – tập trung một nơi.</p>
+      </div>
+      <div class="small opacity-75">LIS <span data-app-version></span></div>
+    </div>
+    <div class="login-panel">
+      <form class="login-card" id="login-form" autocomplete="on">
+        <div class="brand-logo mb-3" data-logo></div>
+        <h4 class="fw-bold mb-1">Đăng nhập</h4>
+        <p class="text-muted mb-4" data-clinic-name>PHÒNG XN Y KHOA</p>
+        <div class="mb-3">
+          <label class="form-label" for="login-user">Tên đăng nhập</label>
+          <input class="form-control form-control-lg" id="login-user" name="username" autocomplete="username" required autofocus>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="login-pass">Mật khẩu</label>
+          <div class="input-group">
+            <input class="form-control form-control-lg" id="login-pass" name="password" type="password" autocomplete="current-password" required>
+            <button class="btn btn-outline-secondary" type="button" id="toggle-pass" aria-label="Hiện mật khẩu"><i class="bi bi-eye"></i></button>
+          </div>
+        </div>
+        <div class="alert alert-danger py-2 small d-none" id="login-error"></div>
+        <button class="btn btn-primary btn-lg w-100" type="submit" id="login-btn">Đăng nhập</button>
+        <div class="demo-hint mt-4 d-none" id="demo-hint">
+          <b>Chế độ DEMO</b> – dữ liệu giả, lưu trong trình duyệt.<br>
+          Tài khoản: <span class="kbd">admin / Admin@123</span> · <span class="kbd">bacsi</span> · <span class="kbd">ktv</span> · <span class="kbd">letan</span> (mật khẩu <span class="kbd">demo123</span>)
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================ APP SHELL ============================ -->
+  <section id="app-view">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-logo" data-logo></div>
+        <div><div class="brand-name" data-clinic-name>PHÒNG XN Y KHOA</div><div class="brand-sub">Laboratory Information System</div></div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="user-box">
+        <div class="fw-semibold text-white" id="user-name"></div>
+        <div class="opacity-75 mb-2" id="user-role"></div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-light" id="btn-change-pass"><i class="bi bi-key"></i> Mật khẩu</button>
+          <button class="btn btn-sm btn-light" id="btn-logout"><i class="bi bi-box-arrow-right"></i> Thoát</button>
+        </div>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="btn btn-sm btn-outline-secondary" id="menu-toggle" aria-label="Menu"><i class="bi bi-list"></i></button>
+        <h2 id="page-title"></h2>
+        <span class="demo-banner d-none" id="demo-banner">DEMO</span>
+        <div class="ms-auto d-flex align-items-center gap-2">
+          <span class="text-muted small d-none d-md-inline" id="today-label"></span>
+        </div>
+      </header>
+      <main class="content" id="view"></main>
+    </div>
+  </section>
+
+  <div class="modal fade" id="app-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable"><div class="modal-content" id="app-modal-content"></div></div>
+  </div>
+  <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+  <iframe id="print-frame" title="print" style="position:absolute;width:0;height:0;border:0;left:-9999px"></iframe>
+
+  <script src="config.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="assets/api.js"></script>
+  <script src="assets/app.js"></script>
+  <script src="assets/views-order.js"></script>
+  <script src="assets/views-admin.js"></script>
+</body>
+</html>
