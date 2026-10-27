@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '1.0.0',
+  VERSION: '1.2.0',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -51,6 +51,7 @@ var T = {
   DOCTORS: 'Doctors',
   LOOKUPS: 'Lookups',
   YEAR_DBS: 'YearDatabases',
+  WARDS: 'Wards',
   SEQUENCES: 'Sequences',
   SYS_LOG: 'SystemLog',           // đăng nhập, cấu hình, quản trị
   // PATIENT DB
@@ -75,7 +76,8 @@ SCHEMA[T.TESTS]       = ['TestCode', 'TestName', 'Unit', 'ResultType', 'RefMinM'
 SCHEMA[T.PANEL_TESTS] = ['PanelCode', 'TestCode', 'SortOrder'];
 SCHEMA[T.DOCTORS]     = ['DoctorName', 'IsActive', 'SortOrder'];
 SCHEMA[T.LOOKUPS]     = ['ListCode', 'Value', 'SortOrder'];
-SCHEMA[T.YEAR_DBS]    = ['Year', 'SpreadsheetId', 'Mode', 'Note'];
+SCHEMA[T.YEAR_DBS]    = ['Year', 'SpreadsheetId', 'Mode', 'Note', 'UsedCells', 'CheckedAt'];
+SCHEMA[T.WARDS]       = ['Province', 'WardName', 'SortOrder', 'IsActive'];
 SCHEMA[T.SEQUENCES]   = ['SeqKey', 'LastValue', 'UpdatedAt'];
 SCHEMA[T.SYS_LOG]     = ['Timestamp', 'Username', 'Action', 'Entity', 'EntityID', 'Detail'];
 
@@ -85,7 +87,8 @@ SCHEMA[T.PATIENTS]    = ['PatientID', 'FullName', 'SearchName', 'Gender', 'Birth
 SCHEMA[T.ORDERS]      = ['OrderID', 'OrderDate', 'PatientID', 'PatientName', 'Gender', 'Age', 'Phone', 'Address',
                          'DoctorName', 'PanelCodes', 'GrossAmount', 'Discount', 'NetAmount', 'PaymentStatus',
                          'Status', 'FollowUpDays', 'FollowUpDate', 'FollowUpStatus', 'Note', 'LegacyCode',
-                         'CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy', 'Version'];
+                         'CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy', 'Version',
+                         'AssignedTo', 'FirstResultAt', 'CompletedAt'];
 SCHEMA[T.ORDER_PANELS]= ['OrderID', 'PanelCode', 'TestCodes', 'Amount', 'ResultStatus', 'PrintCount', 'LastPrintedAt'];
 SCHEMA[T.RESULTS]     = ['OrderID', 'PatientID', 'OrderDate', 'PanelCode', 'TestCode', 'Value', 'NumValue',
                          'Unit', 'RefText', 'Flag', 'EnteredAt', 'EnteredBy'];
@@ -94,7 +97,7 @@ SCHEMA[T.AUDIT]       = ['Timestamp', 'Username', 'Action', 'Entity', 'EntityID'
 /** Which DB each table lives in. */
 var TABLE_DB = {};
 [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS,
- T.YEAR_DBS, T.SEQUENCES, T.SYS_LOG].forEach(function (t) { TABLE_DB[t] = 'CONFIG'; });
+ T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG].forEach(function (t) { TABLE_DB[t] = 'CONFIG'; });
 TABLE_DB[T.PATIENTS] = 'PATIENT';
 [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { TABLE_DB[t] = 'YEAR'; });
 
@@ -127,7 +130,8 @@ var PERM = {
   FOLLOWUP_VIEW: 'followup.view',   // Cảnh báo tái khám
   PRINT: 'print',                   // In / xuất phiếu kết quả
   REPORT_REVENUE: 'report.revenue', // Thống kê doanh thu
-  REPORT_EXPORT: 'report.export',   // Xuất Excel
+  REPORT_EXPORT: 'report.export',   // Xuất Excel báo cáo tổng (toàn bộ phiếu, có doanh thu)
+  WORK_EXPORT: 'work.export',       // Xuất danh sách phiếu mình phụ trách (không có số tiền)
   AUDIT_VIEW: 'audit.view',         // Xem nhật ký hệ thống
   ADMIN_USERS: 'admin.users',       // Quản lý tài khoản & vai trò
   ADMIN_CONFIG: 'admin.config'      // Cấu hình hệ thống, danh mục, kết nối DB năm
@@ -137,8 +141,9 @@ var PERM = {
 var MENU = [
   { key: 'order-new', label: 'Tạo phiếu XN', icon: 'bi-file-earmark-plus', perm: PERM.ORDER_CREATE },
   { key: 'order-search', label: 'Tra cứu phiếu', icon: 'bi-search', perm: PERM.ORDER_VIEW },
+  { key: 'my-work', label: 'Việc của tôi', icon: 'bi-person-check', perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
   { key: 'followup', label: 'Cảnh báo tái khám', icon: 'bi-bell', perm: PERM.FOLLOWUP_VIEW },
-  { key: 'report', label: 'Thống kê doanh thu', icon: 'bi-graph-up', perm: PERM.REPORT_REVENUE },
+  { key: 'report', label: 'Thống kê', icon: 'bi-graph-up', perm: PERM.REPORT_REVENUE },
   { key: 'audit', label: 'Nhật ký hệ thống', icon: 'bi-journal-text', perm: PERM.AUDIT_VIEW },
   { key: 'admin', label: 'Quản trị', icon: 'bi-gear', perm: PERM.ADMIN_CONFIG + '|' + PERM.ADMIN_USERS }
 ];
@@ -154,6 +159,16 @@ var CACHE = {
   TTL_LONG: 21600,   // 6h (max of CacheService)
   TTL_SHORT: 600
 };
+
+/** Dung lượng Google Sheet: 10 triệu ô / file. Vượt ngưỡng → tự tạo DB nối tiếp. */
+var CAPACITY = {
+  MAX_CELLS: 10000000,
+  WARN_PERCENT: 70,        // cảnh báo Admin
+  ROLLOVER_PERCENT: 85     // tự tạo DB_<năm>_<n> và chuyển DB cũ sang FULL
+};
+
+/** Chế độ DB năm: RW = đang ghi phiếu mới | FULL = đầy, chỉ sửa phiếu cũ | RO = khóa sổ, chỉ đọc. */
+var DB_MODE = { RW: 'RW', FULL: 'FULL', RO: 'RO' };
 
 var SECURITY = {
   HASH_ITERATIONS: 300,
@@ -189,6 +204,7 @@ var ROUTES = {
 
   'catalog.get':           { fn: function () { return Catalog.get(); } },
 
+  'patient.index':         { fn: function (p) { return PatientService.index(p); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE },
   'patient.search':        { fn: function (p) { return PatientService.search(p); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE },
   'patient.get':           { fn: function (p) { return PatientService.get(p.patientId); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE },
   'patient.save':          { fn: function (p, c) { return PatientService.save(p, c); }, perm: PERM.ORDER_CREATE + '|' + PERM.PATIENT_EDIT },
@@ -200,6 +216,11 @@ var ROUTES = {
   'order.saveResults':     { fn: function (p, c) { return OrderService.saveResults(p, c); }, perm: PERM.RESULT_ENTER },
   'order.cancel':          { fn: function (p, c) { return OrderService.cancel(p, c); }, perm: PERM.ORDER_CANCEL },
   'order.audit':           { fn: function (p) { return Audit.listForEntity(p.orderId); }, perm: PERM.ORDER_VIEW },
+
+  'user.options':          { fn: function () { return WorkService.userOptions(); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE + '|' + PERM.RESULT_ENTER },
+  'work.list':             { fn: function (p, c) { return WorkService.list(p, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
+  'work.export':           { fn: function (p, c) { return WorkService.exportData(p, c); }, perm: PERM.WORK_EXPORT + '|' + PERM.ADMIN_USERS },
+  'report.productivity':   { fn: function (p) { return WorkService.productivity(p); }, perm: PERM.REPORT_REVENUE + '|' + PERM.ADMIN_USERS },
 
   'history.byPatient':     { fn: function (p) { return HistoryService.byPatient(p); }, perm: PERM.HISTORY_VIEW },
 
@@ -222,12 +243,32 @@ var ROUTES = {
   'admin.settings.save':   { fn: function (p, c) { return AdminService.saveSettings(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.list':      { fn: function () { return AdminService.listYearDbs(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.save':      { fn: function (p, c) { return AdminService.saveYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.years.create':    { fn: function (p, c) { return AdminService.createYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.years.capacity':  { fn: function () { return AdminService.refreshCapacity(); }, perm: PERM.ADMIN_CONFIG },
+  'admin.wards.save':      { fn: function (p, c) { return AdminService.saveWards(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.test':      { fn: function (p) { return AdminService.testYearDb(p); }, perm: PERM.ADMIN_CONFIG },
   'admin.catalog.saveTest':  { fn: function (p, c) { return AdminService.saveTest(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.catalog.savePanel': { fn: function (p, c) { return AdminService.savePanel(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.doctors.save':    { fn: function (p, c) { return AdminService.saveDoctor(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.cache.clear':     { fn: function () { return AdminService.clearCache(); }, perm: PERM.ADMIN_CONFIG }
 };
+
+/**
+ * sys.batch – nhiều lệnh trong 1 request (giảm số lần gọi mạng ~1s/lần).
+ * payload: { calls: [{ action, payload }] } → [{ ok, data } | { ok:false, error }]
+ */
+ROUTES['sys.batch'] = { fn: function (p, ctx) {
+  return (p.calls || []).slice(0, 10).map(function (c) {
+    try {
+      var r = ROUTES[c.action];
+      if (!r || c.action === 'sys.batch' || r.auth === false) throw new AppError('NOT_FOUND', 'Action không hợp lệ trong batch: ' + c.action);
+      if (r.perm && !Auth.hasPerm(ctx, r.perm)) throw new AppError('FORBIDDEN', 'Không có quyền: ' + c.action);
+      return { ok: true, data: r.fn(c.payload || {}, ctx) };
+    } catch (err) {
+      return { ok: false, error: { code: err.code || 'SERVER_ERROR', message: err.message } };
+    }
+  });
+} };
 
 function doPost(e) {
   var started = Date.now();
@@ -367,7 +408,9 @@ function normPhone_(s) {
   var d = String(s).replace(/[^\d+]/g, '');
   if (d.indexOf('+84') === 0) d = '0' + d.substring(3);
   else if (d.indexOf('84') === 0 && d.length === 11) d = '0' + d.substring(2);
-  return d.replace(/\+/g, '');
+  d = d.replace(/\+/g, '');
+  if (d.length === 9 && /^[235789]/.test(d)) d = '0' + d;   // Sheet tự bỏ số 0 đầu
+  return d;
 }
 
 /** Viết hoa họ tên chuẩn hiển thị (giữ nguyên dấu). */
@@ -487,20 +530,34 @@ var Db = (function () {
     return ssMemo[id];
   }
 
-  /** Resolve spreadsheet ID for a table (and year for YEAR tables). */
-  function resolveId_(table, year, forWrite) {
-    var db = TABLE_DB[table];
-    if (db === 'CONFIG') return propId_(PROP.CONFIG_DB_ID);
-    if (db === 'PATIENT') return propId_(PROP.PATIENT_DB_ID);
-    if (db === 'YEAR') {
-      if (!year) throw new AppError('VALIDATION', 'Thiếu năm dữ liệu cho bảng ' + table);
-      var y = YearDb.get(year);
-      if (!y) throw new AppError('NO_YEAR_DB', 'Chưa cấu hình Google Sheet cho năm ' + year + ' (Quản trị → Kết nối dữ liệu năm).');
-      if (forWrite && y.Mode === 'RO') throw new AppError('READ_ONLY', 'Dữ liệu năm ' + year + ' đang ở chế độ chỉ đọc.');
+  /**
+   * Resolve spreadsheet ID for a table.
+   * YEAR tables accept `db` = Spreadsheet ID (định tuyến chính xác) hoặc năm (→ DB đang ghi RW của năm đó).
+   */
+  function resolveId_(table, db, forWrite) {
+    var kind = TABLE_DB[table];
+    if (kind === 'CONFIG') return propId_(PROP.CONFIG_DB_ID);
+    if (kind === 'PATIENT') return propId_(PROP.PATIENT_DB_ID);
+    if (kind === 'YEAR') {
+      if (!db) throw new AppError('VALIDATION', 'Thiếu DB năm cho bảng ' + table);
+      if (typeof db === 'string' && db.length > 20) {
+        var e = YearDb.byId(db);
+        if (forWrite && e && e.Mode === DB_MODE.RO) throw new AppError('READ_ONLY', 'Dữ liệu ' + (e.Note || e.Year) + ' đang ở chế độ chỉ đọc.');
+        return db;
+      }
+      var y = forWrite ? YearDb.active(db) : (YearDb.active(db) || YearDb.forYear(db)[0]);
+      if (!y) throw new AppError('NO_YEAR_DB', 'Chưa có Google Sheet dữ liệu năm ' + db + ' (Quản trị → Kết nối dữ liệu năm → Tạo DB mới).');
       return y.SpreadsheetId;
     }
     throw new AppError('SERVER_ERROR', 'Bảng không xác định: ' + table);
   }
+
+  /* ---- Read cache cho bảng đọc nhiều (Orders, OrderPanels): CacheService, tự xóa khi có ghi ---- */
+  var CACHED_TABLES = {};
+  CACHED_TABLES[T.ORDERS] = true;
+  CACHED_TABLES[T.ORDER_PANELS] = true;
+  function cacheKey_(table, db) { return 'tbl_' + resolveId_(table, db).substring(0, 24) + '_' + table; }
+  function invalidate_(table, db) { if (CACHED_TABLES[table]) CacheUtil.remove(cacheKey_(table, db)); }
 
   function sheet(table, year, forWrite) {
     var id = resolveId_(table, year, forWrite);
@@ -509,6 +566,14 @@ var Db = (function () {
     var ss = openById_(id);
     var sh = ss.getSheetByName(table);
     if (!sh) sh = ensureSheet_(ss, table);
+    else {
+      // Tự bổ sung cột mới của schema (nâng cấp phiên bản không cần thao tác tay)
+      var hdr = header_(sh);
+      if (SCHEMA[table].some(function (c) { return !hdr.map.hasOwnProperty(c); })) {
+        ensureSheet_(ss, table);
+        delete headerMemo[sh.getParent().getId() + '|' + sh.getName()];
+      }
+    }
     sheetMemo[key] = sh;
     return sh;
   }
@@ -567,9 +632,14 @@ var Db = (function () {
     return row;
   }
 
-  /** Read whole table → array of objects (each has hidden _row). */
-  function readAll(table, year) {
-    var sh = sheet(table, year);
+  /** Read whole table → array of objects (each has hidden _row). Orders/OrderPanels được cache. */
+  function readAll(table, db) {
+    var key = CACHED_TABLES[table] ? cacheKey_(table, db) : null;
+    if (key) {
+      var hit = CacheUtil.get(key);
+      if (hit) return hit.map(function (o) { var r = o.__r; delete o.__r; Object.defineProperty(o, '_row', { value: r, enumerable: false }); return o; });
+    }
+    var sh = sheet(table, db);
     var last = sh.getLastRow();
     if (last < 2) return [];
     var hdr = header_(sh);
@@ -582,11 +652,20 @@ var Db = (function () {
       Object.defineProperty(o, '_row', { value: i + 2, enumerable: false });
       out.push(o);
     }
+    if (key) CacheUtil.put(key, out.map(function (o) { var c = Object.assign({}, o); c.__r = o._row; return c; }), CACHE.TTL_LONG);
     return out;
   }
 
   /** Read selected columns only (much faster for wide tables). */
   function readColumns(table, year, columns) {
+    if (CACHED_TABLES[table]) {
+      return readAll(table, year).map(function (o) {
+        var x = {};
+        columns.forEach(function (c) { x[c] = o[c]; });
+        Object.defineProperty(x, '_row', { value: o._row, enumerable: false });
+        return x;
+      });
+    }
     var sh = sheet(table, year);
     var last = sh.getLastRow();
     if (last < 2) return [];
@@ -658,6 +737,7 @@ var Db = (function () {
     var start = sh.getLastRow() + 1;
     if (start + rows.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), rows.length + 500);
     sh.getRange(start, 1, rows.length, hdr.width).setValues(rows);
+    invalidate_(table, year);
   }
 
   /** Update a single row (merge `patch` onto existing values). */
@@ -666,6 +746,7 @@ var Db = (function () {
     var hdr = header_(sh);
     var cur = sh.getRange(rowNum, 1, 1, hdr.width).getValues()[0];
     sh.getRange(rowNum, 1, 1, hdr.width).setValues([objToRow_(patch, hdr, cur)]);
+    invalidate_(table, year);
   }
 
   /** Batch update many rows: [{row, patch}] – one read + one write over the covering block. */
@@ -679,11 +760,13 @@ var Db = (function () {
     var block = rng.getValues();
     items.forEach(function (it) { block[it.row - minR] = objToRow_(it.patch, hdr, block[it.row - minR]); });
     rng.setValues(block);
+    invalidate_(table, year);
   }
 
   function deleteRows(table, year, rowNums) {
     var sh = sheet(table, year, true);
     rowNums.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+    if (rowNums.length) invalidate_(table, year);
   }
 
   /** Replace whole table content (used by admin catalog save & setup). */
@@ -693,6 +776,12 @@ var Db = (function () {
     var last = sh.getLastRow();
     if (last > 1) sh.getRange(2, 1, last - 1, hdr.width).clearContent();
     if (objs.length) sh.getRange(2, 1, objs.length, hdr.width).setValues(objs.map(function (o) { return objToRow_(o, hdr); }));
+    invalidate_(table, year);
+  }
+
+  /** Số ô đang chiếm của 1 spreadsheet (giới hạn Google: 10 triệu ô / file). */
+  function usedCells(id) {
+    return openById_(id).getSheets().reduce(function (s, sh) { return s + sh.getMaxRows() * sh.getMaxColumns(); }, 0);
   }
 
   return {
@@ -708,36 +797,128 @@ var Db = (function () {
     updateRow: updateRow,
     updateRows: updateRows,
     deleteRows: deleteRows,
-    replaceAll: replaceAll
+    replaceAll: replaceAll,
+    usedCells: usedCells,
+    invalidate: invalidate_
   };
 })();
 
-/** Year database registry (YearDatabases sheet in CONFIG DB, cached). */
+/**
+ * Year database registry (YearDatabases – CONFIG DB, cached).
+ *  - Mỗi năm có ≥ 1 DB. Đúng 1 DB ở Mode RW nhận phiếu mới; DB cũ đầy → FULL (vẫn sửa được phiếu cũ); khóa sổ → RO.
+ *  - Phiếu XN-YYMMDD-NNN → năm 20YY → các DB của năm → tìm DB chứa phiếu (cache vị trí).
+ *  - Sang năm mới / DB đầy → tự tạo Google Sheet DB_<năm>[_n] cạnh DB cũ (ensureActive).
+ */
 var YearDb = {
   all: function () {
     var cached = CacheUtil.get(CACHE.YEAR_DBS);
     if (cached) return cached;
     var rows = Db.readAll(T.YEAR_DBS).map(function (r) {
-      return { Year: Number(r.Year), SpreadsheetId: String(r.SpreadsheetId).trim(), Mode: String(r.Mode || 'RW').toUpperCase(), Note: r.Note };
+      return { Year: Number(r.Year), SpreadsheetId: String(r.SpreadsheetId).trim(), Mode: String(r.Mode || 'RW').toUpperCase(),
+               Note: r.Note, UsedCells: toNum_(r.UsedCells, 0), CheckedAt: r.CheckedAt };
     }).filter(function (r) { return r.Year && r.SpreadsheetId; });
     rows.sort(function (a, b) { return a.Year - b.Year; });
     CacheUtil.put(CACHE.YEAR_DBS, rows, CACHE.TTL_LONG);
     return rows;
   },
-  get: function (year) {
-    var y = Number(year);
-    return YearDb.all().filter(function (r) { return r.Year === y; })[0] || null;
+  byId: function (id) { return YearDb.all().filter(function (r) { return r.SpreadsheetId === id; })[0] || null; },
+  forYear: function (year) { var y = Number(year); return YearDb.all().filter(function (r) { return r.Year === y; }); },
+  /** DB đang nhận phiếu mới của năm (RW, bản mới nhất). */
+  active: function (year) {
+    var rw = YearDb.forYear(year).filter(function (r) { return r.Mode === DB_MODE.RW; });
+    return rw.length ? rw[rw.length - 1] : null;
   },
-  /** Years configured that intersect [from, to]. */
+  /** Backward-compatible alias. */
+  get: function (year) { return YearDb.active(year) || YearDb.forYear(year)[0] || null; },
+  /** Spreadsheet IDs có dữ liệu giao với [from, to]. */
+  idsInRange: function (from, to) {
+    var a = yearOf_(from) || 1900, b = yearOf_(to) || 9999;
+    return YearDb.all().filter(function (r) { return r.Year >= a && r.Year <= b; }).map(function (r) { return r.SpreadsheetId; });
+  },
+  allIds: function () { return YearDb.all().map(function (r) { return r.SpreadsheetId; }); },
   yearsInRange: function (from, to) {
     var a = yearOf_(from) || 1900, b = yearOf_(to) || 9999;
-    return YearDb.all().map(function (r) { return r.Year; }).filter(function (y) { return y >= a && y <= b; });
+    var seen = {};
+    return YearDb.all().map(function (r) { return r.Year; }).filter(function (y) { if (seen[y] || y < a || y > b) return false; seen[y] = true; return true; });
   },
-  /** Year from an OrderID XN-YYMMDD-NNN. */
   yearFromOrderId: function (orderId) {
     var m = String(orderId || '').match(/^XN-(\d{2})\d{4}-\d+$/i);
-    if (m) return 2000 + Number(m[1]);
-    return null;
+    return m ? 2000 + Number(m[1]) : null;
+  },
+  /** Spreadsheet ID chứa phiếu (1 DB/năm → trả ngay; nhiều DB → TextFinder + cache vị trí). */
+  locateOrder: function (orderId) {
+    var y = YearDb.yearFromOrderId(orderId);
+    if (!y) throw new AppError('VALIDATION', 'Mã phiếu không đúng định dạng XN-YYMMDD-NNN: ' + orderId);
+    var list = YearDb.forYear(y);
+    if (!list.length) throw new AppError('NO_YEAR_DB', 'Chưa có DB dữ liệu năm ' + y);
+    if (list.length === 1) return list[0].SpreadsheetId;
+    var c = CacheService.getScriptCache(), key = 'loc_' + orderId;
+    var hit = c.get(key);
+    if (hit) return hit;
+    for (var i = list.length - 1; i >= 0; i--) {
+      if (Db.findRowNums(T.ORDERS, list[i].SpreadsheetId, 'OrderID', orderId).length) {
+        c.put(key, list[i].SpreadsheetId, CACHE.TTL_LONG);
+        return list[i].SpreadsheetId;
+      }
+    }
+    throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + orderId);
+  },
+  /**
+   * DB RW cho năm `year` (gọi trong withLock_). Chưa có → tự tạo nếu AUTO_CREATE_YEAR_DB = TRUE.
+   * DB RW vượt ngưỡng dung lượng → tạo DB nối tiếp, DB cũ chuyển FULL.
+   */
+  ensureActive: function (year) {
+    var act = YearDb.active(year);
+    var list = YearDb.forYear(year);
+    if (!act && list.some(function (r) { return r.Mode === DB_MODE.RO; })) {
+      throw new AppError('READ_ONLY', 'Dữ liệu năm ' + year + ' đã khóa sổ (chỉ đọc). Không thể tạo phiếu mới cho năm này.');
+    }
+    var auto = String(Settings.get('AUTO_CREATE_YEAR_DB', 'TRUE')).toUpperCase() !== 'FALSE';
+    if (act) {
+      var pct = act.UsedCells / CAPACITY.MAX_CELLS * 100;
+      if (pct < CAPACITY.ROLLOVER_PERCENT || !auto) return act.SpreadsheetId;
+    }
+    if (!auto) throw new AppError('NO_YEAR_DB', 'Chưa có DB năm ' + year + '. Admin vào Quản trị → Kết nối dữ liệu năm → Tạo DB mới.');
+    return YearDb.create(year, 'system').SpreadsheetId;
+  },
+  /** Tạo Google Sheet DB mới cho năm, đặt cùng thư mục với DB gần nhất, đăng ký RW. */
+  create: function (year, username) {
+    year = Number(year);
+    var same = YearDb.forYear(year);
+    var name = 'DB_' + year + (same.length ? '_' + (same.length + 1) : '');
+    var ss = SpreadsheetApp.create(name);
+    var file = DriveApp.getFileById(ss.getId());
+    var ref = YearDb.all().slice(-1)[0];
+    try {
+      if (ref) {
+        var parents = DriveApp.getFileById(ref.SpreadsheetId).getParents();
+        if (parents.hasNext()) file.moveTo(parents.next());
+      }
+    } catch (e) { console.warn('Không chuyển được thư mục DB mới: ' + e.message); }
+    [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { Db.ensureSheet(ss, t); });
+    var def = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
+    if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+    // DB RW cũ cùng năm → FULL
+    Db.readAll(T.YEAR_DBS).forEach(function (r) {
+      if (Number(r.Year) === year && String(r.Mode).toUpperCase() === DB_MODE.RW) Db.updateRow(T.YEAR_DBS, null, r._row, { Mode: DB_MODE.FULL });
+    });
+    var row = { Year: year, SpreadsheetId: ss.getId(), Mode: DB_MODE.RW, Note: name, UsedCells: Db.usedCells(ss.getId()), CheckedAt: nowIso_() };
+    Db.insert(T.YEAR_DBS, null, [row]);
+    YearDb.invalidate();
+    SysLog.write(username || 'system', 'YEAR_DB_CREATE', 'YearDatabase', name, { id: ss.getId(), url: ss.getUrl() });
+    return row;
+  },
+  /** Cập nhật dung lượng các DB (maintenance trigger / Admin). */
+  refreshCapacity: function () {
+    var rows = Db.readAll(T.YEAR_DBS);
+    var items = rows.map(function (r) {
+      var used = '';
+      try { used = Db.usedCells(String(r.SpreadsheetId).trim()); } catch (e) { used = ''; }
+      return { row: r._row, patch: { UsedCells: used, CheckedAt: nowIso_() } };
+    });
+    Db.updateRows(T.YEAR_DBS, null, items);
+    YearDb.invalidate();
+    return YearDb.all();
   },
   invalidate: function () { CacheUtil.remove(CACHE.YEAR_DBS); }
 };
@@ -881,7 +1062,10 @@ var Auth = {
       permissions: ctx.perms,
       menu: MENU.filter(function (m) { return Auth.hasPerm(ctx, m.perm); }),
       settings: Settings.all(),
-      years: YearDb.all().map(function (y) { return { Year: y.Year, Mode: y.Mode }; }),
+      years: YearDb.all().map(function (y) {
+        return { Year: y.Year, Mode: y.Mode, Note: y.Note, UsedPercent: Math.round(y.UsedCells / CAPACITY.MAX_CELLS * 1000) / 10 };
+      }),
+      capacityWarnPercent: CAPACITY.WARN_PERCENT,
       catalog: Catalog.get()
     };
   },
@@ -1005,7 +1189,14 @@ var Catalog = {
     Db.readAll(T.LOOKUPS).sort(function (a, b) { return toNum_(a.SortOrder, 0) - toNum_(b.SortOrder, 0); })
       .forEach(function (r) { (lookups[r.ListCode] = lookups[r.ListCode] || []).push(String(r.Value)); });
 
-    var cat = { panels: panels, tests: tests, panelTests: panelTests, doctors: doctors, lookups: lookups, builtAt: nowIso_() };
+    var wards = {};
+    Db.readAll(T.WARDS).filter(function (r) { return r.WardName && (r.IsActive === '' || toBool_(r.IsActive)); })
+      .sort(function (a, b) { return toNum_(a.SortOrder, 999) - toNum_(b.SortOrder, 999); })
+      .forEach(function (r) { (wards[r.Province] = wards[r.Province] || []).push(String(r.WardName)); });
+    var provinces = Object.keys(wards);
+    (lookups.PROVINCE || []).forEach(function (pv) { if (provinces.indexOf(pv) === -1) provinces.push(pv); });
+    lookups.PROVINCE = provinces;
+    var cat = { panels: panels, tests: tests, panelTests: panelTests, doctors: doctors, lookups: lookups, wards: wards, builtAt: nowIso_() };
     CacheUtil.put(CACHE.CATALOG, cat, CACHE.TTL_LONG);
     return cat;
   },
@@ -1093,16 +1284,16 @@ var Audit = {
       };
     };
     Db.readAll(T.SYS_LOG).forEach(push('SYSTEM'));
-    YearDb.yearsInRange(from, to).forEach(function (y) {
-      try { Db.readAll(T.AUDIT, y).forEach(push('DB_' + y)); } catch (e) { /* year DB unreachable → skip */ }
+    YearDb.all().filter(function (r) { return r.Year >= yearOf_(from) && r.Year <= yearOf_(to); }).forEach(function (y) {
+      try { Db.readAll(T.AUDIT, y.SpreadsheetId).forEach(push(y.Note || ('DB_' + y.Year))); } catch (e) { /* DB unreachable → skip */ }
     });
     rows.sort(function (a, b) { return a.Timestamp < b.Timestamp ? 1 : -1; });
     return { total: rows.length, rows: rows.slice(0, limit) };
   },
 
   listForEntity: function (orderId) {
-    var y = YearDb.yearFromOrderId(orderId);
-    if (!y) return [];
+    var y;
+    try { y = YearDb.locateOrder(orderId); } catch (e) { return []; }
     return Db.findBy(T.AUDIT, y, 'EntityID', orderId)
       .sort(function (a, b) { return a.Timestamp < b.Timestamp ? 1 : -1; });
   }
@@ -1132,6 +1323,27 @@ var SysLog = {
 
 var PatientService = {
   COLS: ['PatientID', 'FullName', 'SearchName', 'Gender', 'BirthYear', 'Phone', 'Address', 'Ward', 'Province', 'IsActive'],
+  INDEX_KEY: 'pidx_v1',
+
+  /**
+   * Danh bạ bệnh nhân rút gọn cho FE tìm kiếm tức thì (không gọi server mỗi lần gõ).
+   * p.since = mốc thời gian lần tải trước → chỉ trả các hồ sơ tạo/sửa sau mốc (đồng bộ tăng dần).
+   * Row: [PatientID, FullName, Gender, BirthYear, Phone, Address, Ward, Province, IsActive(1/0)]
+   */
+  index: function (p) {
+    var all = CacheUtil.get(PatientService.INDEX_KEY);
+    if (!all) {
+      all = Db.readColumns(T.PATIENTS, null, PatientService.COLS.concat(['CreatedAt', 'UpdatedAt'])).map(function (r) {
+        return { s: String(r.UpdatedAt || r.CreatedAt || ''), r: [r.PatientID, r.FullName, r.Gender, toNum_(r.BirthYear) || '', normPhone_(r.Phone),
+          r.Address, r.Ward, r.Province, (r.IsActive === '' || toBool_(r.IsActive)) ? 1 : 0] };
+      }).filter(function (x) { return x.r[0]; });
+      CacheUtil.put(PatientService.INDEX_KEY, all, CACHE.TTL_LONG);
+    }
+    var since = String(p.since || '');
+    var stamp = all.reduce(function (m, x) { return x.s > m ? x.s : m; }, '');
+    var rows = since ? all.filter(function (x) { return x.s > since; }) : all;
+    return { full: !since, stamp: stamp, count: all.length, rows: rows.map(function (x) { return x.r; }) };
+  },
 
   /** p: { phone?, q?, birthYear?, ward?, limit? } */
   search: function (p) {
@@ -1148,7 +1360,7 @@ var PatientService = {
     var tokens = key ? key.split(' ') : [];
     var out = rows.filter(function (r) {
       if (r.IsActive !== '' && !toBool_(r.IsActive)) return false;
-      if (phone && String(r.Phone).indexOf(phone) === -1) return false;
+      if (phone && normPhone_(r.Phone).indexOf(phone) === -1 && String(r.Phone).indexOf(phone.replace(/^0/, '')) === -1) return false;
       if (tokens.length) {
         var sn = String(r.SearchName || searchKey_(r.FullName));
         for (var i = 0; i < tokens.length; i++) if (sn.indexOf(tokens[i]) === -1) return false;
@@ -1200,6 +1412,7 @@ var PatientService = {
         data.UpdatedAt = nowIso_();
         data.UpdatedBy = ctx.username;
         Db.updateRow(T.PATIENTS, null, cur._row, data);
+        CacheUtil.remove(PatientService.INDEX_KEY);
         SysLog.write(ctx.username, 'PATIENT_UPDATE', 'Patient', p.PatientID, PatientService.diff_(cur, data));
         return { patient: PatientService.publicView_(Object.assign({}, cur, data)) };
       });
@@ -1215,6 +1428,7 @@ var PatientService = {
       data.CreatedAt = nowIso_();
       data.CreatedBy = ctx.username;
       Db.insert(T.PATIENTS, null, [data]);
+      CacheUtil.remove(PatientService.INDEX_KEY);
       SysLog.write(ctx.username, 'PATIENT_CREATE', 'Patient', data.PatientID, { FullName: data.FullName, Phone: data.Phone });
       return { patient: PatientService.publicView_(data) };
     });
@@ -1297,8 +1511,10 @@ var OrderService = {
     var lines = OrderService.buildLines_(p.panels, ctx);
     var money = OrderService.money_(lines, p.discount, ctx);
     var followDays = toNum_(p.followUpDays, 0);
+    var assignees = WorkService.normAssignees(p.assignedTo);
 
     return withLock_(function () {
+      var db = YearDb.ensureActive(year);          // DB đang ghi của năm (tự tạo khi sang năm mới / DB đầy)
       var orderId = Ids.newOrderId(orderDate);
       var now = nowIso_();
       var order = {
@@ -1314,7 +1530,8 @@ var OrderService = {
         FollowUpDays: followDays || '', FollowUpDate: followDays ? addDays_(orderDate, followDays) : '',
         FollowUpStatus: followDays ? ENUM.FOLLOWUP.PENDING : '',
         Note: String(p.note || '').trim(), LegacyCode: '',
-        CreatedAt: now, CreatedBy: ctx.username, UpdatedAt: now, UpdatedBy: ctx.username, Version: 1
+        CreatedAt: now, CreatedBy: ctx.username, UpdatedAt: now, UpdatedBy: ctx.username, Version: 1,
+        AssignedTo: assignees.join(','), FirstResultAt: '', CompletedAt: ''
       };
 
       var panelRows = lines.map(function (l) {
@@ -1324,21 +1541,23 @@ var OrderService = {
 
       var resultRows = [];
       if (p.results && p.results.length && Auth.hasPerm(ctx, PERM.RESULT_ENTER)) {
-        resultRows = OrderService.buildResultRows_(order, p.results, ctx);
+        resultRows = OrderService.buildResultRows_(order, OrderService.expandShared_(p.results, panelRows), ctx);
         var resulted = {};
         resultRows.forEach(function (r) { resulted[r.PanelCode] = true; });
         panelRows.forEach(function (pr) { if (resulted[pr.PanelCode]) pr.ResultStatus = ENUM.PANEL_STATUS.RESULTED; });
         order.Status = OrderService.statusFromPanels_(panelRows);
+        if (resultRows.length) order.FirstResultAt = now;
+        if (order.Status === ENUM.ORDER_STATUS.COMPLETED) order.CompletedAt = now;
       }
 
-      Db.insert(T.ORDERS, year, [order]);
-      Db.insert(T.ORDER_PANELS, year, panelRows);
-      if (resultRows.length) Db.insert(T.RESULTS, year, resultRows);
+      Db.insert(T.ORDERS, db, [order]);
+      Db.insert(T.ORDER_PANELS, db, panelRows);
+      if (resultRows.length) Db.insert(T.RESULTS, db, resultRows);
 
-      Audit.write(ctx, year, 'ORDER_CREATE', 'Order', orderId, {
-        patient: patient.PatientID, panels: order.PanelCodes, net: money.net, results: resultRows.length
+      Audit.write(ctx, db, 'ORDER_CREATE', 'Order', orderId, {
+        patient: patient.PatientID, panels: order.PanelCodes, net: money.net, results: resultRows.length, assignedTo: order.AssignedTo
       });
-      return OrderService.get(orderId, ctx);
+      return OrderService.buildView_(order, panelRows, resultRows, ctx);   // trả từ bộ nhớ, không đọc lại Sheet
     });
   },
 
@@ -1349,9 +1568,10 @@ var OrderService = {
    */
   update: function (p, ctx) {
     required_(p, ['orderId']);
-    var year = OrderService.yearOrThrow_(p.orderId);
+    var db = YearDb.locateOrder(p.orderId);
+    var year = YearDb.yearFromOrderId(p.orderId);
     return withLock_(function () {
-      var cur = Db.findOne(T.ORDERS, year, 'OrderID', p.orderId);
+      var cur = Db.findOne(T.ORDERS, db, 'OrderID', p.orderId);
       if (!cur) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + p.orderId);
       if (cur.Status === ENUM.ORDER_STATUS.CANCELLED) throw new AppError('VALIDATION', 'Phiếu đã hủy, không thể sửa.');
       if (p.version !== undefined && Number(p.version) !== Number(cur.Version)) {
@@ -1361,6 +1581,7 @@ var OrderService = {
       var patch = {};
       if (p.doctorName !== undefined) patch.DoctorName = String(p.doctorName).trim();
       if (p.note !== undefined) patch.Note = String(p.note).trim();
+      if (p.assignedTo !== undefined) patch.AssignedTo = WorkService.normAssignees(p.assignedTo).join(',');
       if (p.paymentStatus !== undefined) patch.PaymentStatus = p.paymentStatus === ENUM.PAYMENT.PAID ? ENUM.PAYMENT.PAID : ENUM.PAYMENT.UNPAID;
       if (p.orderDate !== undefined) {
         var nd = toDateStr_(p.orderDate);
@@ -1377,7 +1598,7 @@ var OrderService = {
         patch.FollowUpDate = addDays_(baseDate, cur.FollowUpDays);
       }
 
-      var existingPanels = Db.findBy(T.ORDER_PANELS, year, 'OrderID', p.orderId);
+      var existingPanels = Db.findBy(T.ORDER_PANELS, db, 'OrderID', p.orderId);
       var panelsChanged = false;
       if (p.panels) {
         var lines = OrderService.buildLines_(p.panels, ctx, existingPanels);
@@ -1395,15 +1616,15 @@ var OrderService = {
           else inserts.push({ OrderID: p.orderId, PanelCode: l.PanelCode, TestCodes: l.TestCodes.join(','), Amount: l.Amount,
                               ResultStatus: ENUM.PANEL_STATUS.PENDING, PrintCount: 0, LastPrintedAt: '' });
         });
-        Db.updateRows(T.ORDER_PANELS, year, updates);
-        if (inserts.length) Db.insert(T.ORDER_PANELS, year, inserts);
+        Db.updateRows(T.ORDER_PANELS, db, updates);
+        if (inserts.length) Db.insert(T.ORDER_PANELS, db, inserts);
         if (removed.length) {
           // Remove results of removed panels as well
-          var resRows = Db.findBy(T.RESULTS, year, 'OrderID', p.orderId)
+          var resRows = Db.findBy(T.RESULTS, db, 'OrderID', p.orderId)
             .filter(function (r) { return removed.some(function (e) { return e.PanelCode === r.PanelCode; }); })
             .map(function (r) { return r._row; });
-          Db.deleteRows(T.RESULTS, year, resRows);
-          Db.deleteRows(T.ORDER_PANELS, year, removed.map(function (e) { return e._row; }));
+          Db.deleteRows(T.RESULTS, db, resRows);
+          Db.deleteRows(T.ORDER_PANELS, db, removed.map(function (e) { return e._row; }));
         }
         patch.PanelCodes = lines.map(function (l) { return l.PanelCode; }).join(',');
         var money = OrderService.money_(lines, p.discount !== undefined ? p.discount : cur.Discount, ctx, p.discount === undefined);
@@ -1417,7 +1638,7 @@ var OrderService = {
       }
 
       if (panelsChanged) {
-        var nowPanels = Db.findBy(T.ORDER_PANELS, year, 'OrderID', p.orderId);
+        var nowPanels = Db.findBy(T.ORDER_PANELS, db, 'OrderID', p.orderId);
         patch.Status = OrderService.statusFromPanels_(nowPanels);
       }
       patch.UpdatedAt = nowIso_();
@@ -1425,103 +1646,153 @@ var OrderService = {
       patch.Version = Number(cur.Version || 1) + 1;
 
       // Re-locate the row (deletions above may not affect Orders, but be safe)
-      var row = Db.findRowNums(T.ORDERS, year, 'OrderID', p.orderId)[0];
-      Db.updateRow(T.ORDERS, year, row, patch);
-      Audit.write(ctx, year, 'ORDER_UPDATE', 'Order', p.orderId, PatientService.diff_(cur, patch));
+      var row = Db.findRowNums(T.ORDERS, db, 'OrderID', p.orderId)[0];
+      Db.updateRow(T.ORDERS, db, row, patch);
+      Audit.write(ctx, db, 'ORDER_UPDATE', 'Order', p.orderId, PatientService.diff_(cur, patch));
       return OrderService.get(p.orderId, ctx);
     });
   },
 
   /* ----------------------------------------------------------------- RESULTS */
-  /** p: { orderId, panelCode, results: [{ testCode, value }] } */
+  /**
+   * p: { orderId, panelCode, results: [{ testCode, value }] }
+   * Chỉ số dùng chung nhiều nhóm (vd ALT ở SH & GD): lưu ở nhóm này → tự đồng bộ sang các nhóm khác của phiếu.
+   */
   saveResults: function (p, ctx) {
     required_(p, ['orderId', 'panelCode']);
-    var year = OrderService.yearOrThrow_(p.orderId);
+    var db = YearDb.locateOrder(p.orderId);
     return withLock_(function () {
-      var order = Db.findOne(T.ORDERS, year, 'OrderID', p.orderId);
+      var order = Db.findOne(T.ORDERS, db, 'OrderID', p.orderId);
       if (!order) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + p.orderId);
       if (order.Status === ENUM.ORDER_STATUS.CANCELLED) throw new AppError('VALIDATION', 'Phiếu đã hủy.');
-      var panels = Db.findBy(T.ORDER_PANELS, year, 'OrderID', p.orderId);
-      var panel = panels.filter(function (x) { return x.PanelCode === p.panelCode; })[0];
-      if (!panel) throw new AppError('VALIDATION', 'Phiếu không có nhóm ' + p.panelCode);
+      var panels = Db.findBy(T.ORDER_PANELS, db, 'OrderID', p.orderId);
+      if (!panels.some(function (x) { return x.PanelCode === p.panelCode; })) throw new AppError('VALIDATION', 'Phiếu không có nhóm ' + p.panelCode);
 
-      var existing = Db.findBy(T.RESULTS, year, 'OrderID', p.orderId).filter(function (r) { return r.PanelCode === p.panelCode; });
-      var exMap = {};
-      existing.forEach(function (r) { exMap[r.TestCode] = r; });
+      var allRes = Db.findBy(T.RESULTS, db, 'OrderID', p.orderId);
+      var exMap = {};                                       // panel|test → row
+      allRes.forEach(function (r) { exMap[r.PanelCode + '|' + r.TestCode] = r; });
 
-      var incoming = (p.results || []).map(function (r) { return { panelCode: p.panelCode, testCode: r.testCode, value: r.value }; });
+      // Mở rộng: kết quả nhập ở nhóm này + các nhóm khác của phiếu có cùng chỉ số
+      var incoming = OrderService.expandShared_((p.results || []).map(function (r) {
+        return { panelCode: p.panelCode, testCode: r.testCode, value: r.value };
+      }), panels, true);
       var built = OrderService.buildResultRows_(order, incoming, ctx, true);
+
       var updates = [], inserts = [], deletes = [], changes = [];
       built.forEach(function (nr) {
-        var ex = exMap[nr.TestCode];
+        var ex = exMap[nr.PanelCode + '|' + nr.TestCode];
         if (nr.Value === '') {
-          if (ex) { deletes.push(ex._row); changes.push({ t: nr.TestCode, from: ex.Value, to: '' }); }
+          if (ex) { deletes.push(ex._row); changes.push({ p: nr.PanelCode, t: nr.TestCode, from: ex.Value, to: '' }); delete exMap[nr.PanelCode + '|' + nr.TestCode]; }
           return;
         }
         if (ex) {
           if (String(ex.Value) !== String(nr.Value)) {
             updates.push({ row: ex._row, patch: nr });
-            changes.push({ t: nr.TestCode, from: ex.Value, to: nr.Value });
+            changes.push({ p: nr.PanelCode, t: nr.TestCode, from: ex.Value, to: nr.Value });
+            exMap[nr.PanelCode + '|' + nr.TestCode] = Object.assign({}, ex, nr);
           }
         } else {
           inserts.push(nr);
-          changes.push({ t: nr.TestCode, from: '', to: nr.Value });
+          changes.push({ p: nr.PanelCode, t: nr.TestCode, from: '', to: nr.Value });
+          exMap[nr.PanelCode + '|' + nr.TestCode] = nr;
         }
       });
 
       if (!changes.length) return OrderService.get(p.orderId, ctx);
 
-      Db.updateRows(T.RESULTS, year, updates);
-      if (inserts.length) Db.insert(T.RESULTS, year, inserts);
-      if (deletes.length) Db.deleteRows(T.RESULTS, year, deletes);
+      Db.updateRows(T.RESULTS, db, updates);
+      if (inserts.length) Db.insert(T.RESULTS, db, inserts);
+      if (deletes.length) Db.deleteRows(T.RESULTS, db, deletes);
 
-      var remaining = existing.length - deletes.length + inserts.length;
-      var panelStatus = remaining > 0 ? ENUM.PANEL_STATUS.RESULTED : ENUM.PANEL_STATUS.PENDING;
-      Db.updateRow(T.ORDER_PANELS, year, panel._row, { ResultStatus: panelStatus });
-      panels.forEach(function (x) { if (x.PanelCode === p.panelCode) x.ResultStatus = panelStatus; });
-
-      var orderRow = Db.findRowNums(T.ORDERS, year, 'OrderID', p.orderId)[0];
-      Db.updateRow(T.ORDERS, year, orderRow, {
-        Status: OrderService.statusFromPanels_(panels), UpdatedAt: nowIso_(), UpdatedBy: ctx.username,
-        Version: Number(order.Version || 1) + 1
+      // Trạng thái từng nhóm theo kết quả còn lại
+      var finalResults = Object.keys(exMap).map(function (k) { return exMap[k]; });
+      var hasRes = {};
+      finalResults.forEach(function (r) { hasRes[r.PanelCode] = true; });
+      var panelUpdates = [];
+      panels.forEach(function (x) {
+        var st = hasRes[x.PanelCode] ? ENUM.PANEL_STATUS.RESULTED : ENUM.PANEL_STATUS.PENDING;
+        if (x.ResultStatus !== st) { x.ResultStatus = st; panelUpdates.push({ row: x._row, patch: { ResultStatus: st } }); }
       });
-      Audit.write(ctx, year, 'RESULT_SAVE', 'Order', p.orderId, { panel: p.panelCode, changes: changes });
-      return OrderService.get(p.orderId, ctx);
+      Db.updateRows(T.ORDER_PANELS, db, panelUpdates);
+
+      var now2 = nowIso_();
+      var orderPatch = { Status: OrderService.statusFromPanels_(panels), UpdatedAt: now2, UpdatedBy: ctx.username,
+                         Version: Number(order.Version || 1) + 1 };
+      if (finalResults.length && !order.FirstResultAt) orderPatch.FirstResultAt = now2;
+      if (orderPatch.Status === ENUM.ORDER_STATUS.COMPLETED) { if (!order.CompletedAt) orderPatch.CompletedAt = now2; }
+      else if (order.CompletedAt) orderPatch.CompletedAt = '';
+      Db.updateRow(T.ORDERS, db, order._row, orderPatch);
+      Audit.write(ctx, db, 'RESULT_SAVE', 'Order', p.orderId, { panel: p.panelCode, changes: changes });
+      return OrderService.buildView_(Object.assign({}, order, orderPatch), panels, finalResults, ctx);
     });
   },
 
   /* ----------------------------------------------------------------- CANCEL */
   cancel: function (p, ctx) {
     required_(p, ['orderId', 'reason']);
-    var year = OrderService.yearOrThrow_(p.orderId);
+    var db = YearDb.locateOrder(p.orderId);
     return withLock_(function () {
-      var cur = Db.findOne(T.ORDERS, year, 'OrderID', p.orderId);
+      var cur = Db.findOne(T.ORDERS, db, 'OrderID', p.orderId);
       if (!cur) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + p.orderId);
-      Db.updateRow(T.ORDERS, year, cur._row, {
+      Db.updateRow(T.ORDERS, db, cur._row, {
         Status: ENUM.ORDER_STATUS.CANCELLED, FollowUpStatus: cur.FollowUpStatus ? ENUM.FOLLOWUP.SKIPPED : '',
         Note: (cur.Note ? cur.Note + ' | ' : '') + 'HỦY: ' + p.reason,
         UpdatedAt: nowIso_(), UpdatedBy: ctx.username, Version: Number(cur.Version || 1) + 1
       });
-      Audit.write(ctx, year, 'ORDER_CANCEL', 'Order', p.orderId, { reason: p.reason, previousStatus: cur.Status });
+      Audit.write(ctx, db, 'ORDER_CANCEL', 'Order', p.orderId, { reason: p.reason, previousStatus: cur.Status });
       return OrderService.get(p.orderId, ctx);
     });
   },
 
   /* ----------------------------------------------------------------- READ */
   get: function (orderId, ctx) {
-    var year = OrderService.yearOrThrow_(orderId);
-    var order = Db.findOne(T.ORDERS, year, 'OrderID', orderId);
+    var db = YearDb.locateOrder(orderId);
+    var order = Db.findOne(T.ORDERS, db, 'OrderID', orderId);
     if (!order) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + orderId);
-    var panels = Db.findBy(T.ORDER_PANELS, year, 'OrderID', orderId).map(function (x) {
+    return OrderService.buildView_(order, Db.findBy(T.ORDER_PANELS, db, 'OrderID', orderId), Db.findBy(T.RESULTS, db, 'OrderID', orderId), ctx);
+  },
+
+  /** Order + panels + results (raw rows) → payload cho FE. */
+  buildView_: function (order, panelRows, resultRows, ctx) {
+    var panels = panelRows.map(function (x) {
       return { PanelCode: x.PanelCode, TestCodes: x.TestCodes ? String(x.TestCodes).split(',') : [], Amount: toNum_(x.Amount, 0),
                ResultStatus: x.ResultStatus, PrintCount: toNum_(x.PrintCount, 0), LastPrintedAt: x.LastPrintedAt };
     });
-    var results = Db.findBy(T.RESULTS, year, 'OrderID', orderId).map(function (r) {
+    var results = resultRows.map(function (r) {
       return { PanelCode: r.PanelCode, TestCode: r.TestCode, Value: r.Value, Unit: r.Unit, RefText: r.RefText,
                Flag: r.Flag, EnteredAt: r.EnteredAt, EnteredBy: r.EnteredBy };
     });
     var out = { order: OrderService.view_(order, ctx), panels: panels, results: results };
     if (!OrderService.canSeeMoney_(ctx)) out.panels.forEach(function (x) { x.Amount = null; });
+    return out;
+  },
+
+  /**
+   * Nhân bản kết quả sang các nhóm khác của phiếu có cùng chỉ số (vd ALT ∈ SH & GD).
+   * Giá trị nhập trực tiếp cho nhóm luôn ưu tiên hơn giá trị nhân bản.
+   */
+  expandShared_: function (results, panelRows, keepEmpty) {
+    var testsOf = {};
+    panelRows.forEach(function (pr) {
+      var codes = pr.TestCodes ? String(pr.TestCodes).split(',').filter(String) : Catalog.testsOfPanel(pr.PanelCode).map(function (t) { return t.TestCode; });
+      testsOf[pr.PanelCode] = codes;
+    });
+    var direct = {}, out = [];
+    results.forEach(function (r) {
+      var v = r.value === null || r.value === undefined ? '' : String(r.value).trim();
+      if (!v && !keepEmpty) return;
+      direct[r.panelCode + '|' + r.testCode] = true;
+      out.push({ panelCode: r.panelCode, testCode: r.testCode, value: v });
+    });
+    var extra = {};
+    out.slice().forEach(function (r) {
+      Object.keys(testsOf).forEach(function (pc) {
+        var k = pc + '|' + r.testCode;
+        if (pc === r.panelCode || direct[k] || extra[k] || testsOf[pc].indexOf(r.testCode) === -1) return;
+        extra[k] = true;
+        out.push({ panelCode: pc, testCode: r.testCode, value: r.value });
+      });
+    });
     return out;
   },
 
@@ -1540,8 +1811,7 @@ var OrderService = {
     if (/^XN-\d{6}-\d+$/i.test(q)) {
       try { return { total: 1, rows: [OrderService.get(q.toUpperCase(), ctx).order] }; } catch (e) { return { total: 0, rows: [] }; }
     }
-    var years = YearDb.yearsInRange(from, to);
-    years.forEach(function (y) {
+    YearDb.idsInRange(from, to).forEach(function (y) {
       var all;
       try { all = Db.readAll(T.ORDERS, y); } catch (e) { return; }
       all.forEach(function (o) {
@@ -1569,9 +1839,9 @@ var OrderService = {
 
   listByPatient: function (patientId) {
     var out = [];
-    YearDb.all().forEach(function (y) {
+    YearDb.allIds().forEach(function (y) {
       try {
-        Db.findBy(T.ORDERS, y.Year, 'PatientID', patientId).forEach(function (o) {
+        Db.findBy(T.ORDERS, y, 'PatientID', patientId).forEach(function (o) {
           out.push({ OrderID: o.OrderID, OrderDate: toDateStr_(o.OrderDate), PanelCodes: o.PanelCodes, Status: o.Status,
                      DoctorName: o.DoctorName, FollowUpDate: o.FollowUpDate });
         });
@@ -1599,7 +1869,9 @@ var OrderService = {
       NetAmount: toNum_(o.NetAmount, 0), PaymentStatus: o.PaymentStatus, Status: o.Status,
       FollowUpDays: toNum_(o.FollowUpDays), FollowUpDate: toDateStr_(o.FollowUpDate), FollowUpStatus: o.FollowUpStatus,
       Note: o.Note, LegacyCode: o.LegacyCode, CreatedAt: o.CreatedAt, CreatedBy: o.CreatedBy,
-      UpdatedAt: o.UpdatedAt, UpdatedBy: o.UpdatedBy, Version: toNum_(o.Version, 1)
+      UpdatedAt: o.UpdatedAt, UpdatedBy: o.UpdatedBy, Version: toNum_(o.Version, 1),
+      AssignedTo: o.AssignedTo ? String(o.AssignedTo).split(',').filter(String) : [],
+      FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || ''
     };
     if (ctx && !OrderService.canSeeMoney_(ctx)) { v.GrossAmount = v.Discount = v.NetAmount = null; }
     return v;
@@ -1692,9 +1964,9 @@ var HistoryService = {
     if (codes) codes.forEach(function (c) { filter[c] = true; });
 
     var points = [];
-    YearDb.all().forEach(function (y) {
+    YearDb.allIds().forEach(function (y) {
       var rows;
-      try { rows = Db.findBy(T.RESULTS, y.Year, 'PatientID', p.patientId); } catch (e) { return; }
+      try { rows = Db.findBy(T.RESULTS, y, 'PatientID', p.patientId); } catch (e) { return; }
       rows.forEach(function (r) {
         if (codes && !filter[r.TestCode]) return;
         points.push({ TestCode: r.TestCode, OrderID: r.OrderID, OrderDate: toDateStr_(r.OrderDate), PanelCode: r.PanelCode,
@@ -1739,7 +2011,7 @@ var FollowUpService = {
     var cols = ['OrderID', 'OrderDate', 'PatientID', 'PatientName', 'Gender', 'Age', 'Phone', 'DoctorName', 'PanelCodes',
                 'Status', 'FollowUpDays', 'FollowUpDate', 'FollowUpStatus', 'Note'];
     // scan from one year before `from` so we can detect revisits
-    var years = YearDb.yearsInRange(addDays_(from, -366), addDays_(to, 366));
+    var years = YearDb.idsInRange(addDays_(from, -366), addDays_(to, 366));
     var all = [];
     years.forEach(function (y) { try { all = all.concat(Db.readColumns(T.ORDERS, y, cols)); } catch (e) { /* skip */ } });
 
@@ -1779,7 +2051,7 @@ var FollowUpService = {
     if ([ENUM.FOLLOWUP.DONE, ENUM.FOLLOWUP.SKIPPED, ENUM.FOLLOWUP.PENDING].indexOf(p.status) === -1) {
       throw new AppError('VALIDATION', 'Trạng thái tái khám không hợp lệ.');
     }
-    var year = OrderService.yearOrThrow_(p.orderId);
+    var year = YearDb.locateOrder(p.orderId);
     return withLock_(function () {
       var o = Db.findOne(T.ORDERS, year, 'OrderID', p.orderId);
       if (!o) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + p.orderId);
@@ -1796,7 +2068,7 @@ var FollowUpService = {
 var ReportService = {
   scan_: function (from, to) {
     var orders = [], lines = [];
-    YearDb.yearsInRange(from, to).forEach(function (y) {
+    YearDb.idsInRange(from, to).forEach(function (y) {
       var os;
       try { os = Db.readAll(T.ORDERS, y); } catch (e) { return; }
       var ids = {};
@@ -1875,7 +2147,7 @@ var ReportService = {
 
     var results = [];
     if (p.includeResults) {
-      YearDb.yearsInRange(from, to).forEach(function (y) {
+      YearDb.idsInRange(from, to).forEach(function (y) {
         try {
           Db.readAll(T.RESULTS, y).forEach(function (r) {
             if (!orderMap[r.OrderID]) return;
@@ -2164,7 +2436,7 @@ var PrintService = {
   },
 
   markPrinted_: function (orderId, codes, ctx) {
-    var year = YearDb.yearFromOrderId(orderId);
+    var year = YearDb.locateOrder(orderId);
     withLock_(function () {
       var rows = Db.findBy(T.ORDER_PANELS, year, 'OrderID', orderId).filter(function (x) { return codes.indexOf(x.PanelCode) > -1; });
       Db.updateRows(T.ORDER_PANELS, year, rows.map(function (x) {
@@ -2192,7 +2464,8 @@ var PERM_LABELS = [
   { key: PERM.PATIENT_EDIT, label: 'Sửa hồ sơ bệnh nhân', group: 'Bệnh nhân' },
   { key: PERM.FOLLOWUP_VIEW, label: 'Cảnh báo tái khám', group: 'Bệnh nhân' },
   { key: PERM.REPORT_REVENUE, label: 'Thống kê doanh thu', group: 'Báo cáo' },
-  { key: PERM.REPORT_EXPORT, label: 'Xuất Excel', group: 'Báo cáo' },
+  { key: PERM.REPORT_EXPORT, label: 'Xuất Excel báo cáo tổng (toàn bộ phiếu)', group: 'Báo cáo' },
+  { key: PERM.WORK_EXPORT, label: 'Xuất danh sách phiếu mình phụ trách', group: 'Báo cáo' },
   { key: PERM.AUDIT_VIEW, label: 'Xem nhật ký hệ thống', group: 'Quản trị' },
   { key: PERM.ADMIN_USERS, label: 'Quản lý tài khoản & vai trò', group: 'Quản trị' },
   { key: PERM.ADMIN_CONFIG, label: 'Cấu hình hệ thống & danh mục', group: 'Quản trị' }
@@ -2227,6 +2500,7 @@ var AdminService = {
           patch.MustChangePassword = true;
         }
         Db.updateRow(T.USERS, null, cur._row, patch);
+        CacheUtil.remove(WorkService.USERS_KEY);
         if (!active || cur.RoleCode !== p.RoleCode || p.Password) Auth.revokeUser(username);
         SysLog.write(ctx.username, 'USER_UPDATE', 'User', username, { role: p.RoleCode, active: active, passwordReset: !!p.Password });
       } else {
@@ -2238,6 +2512,7 @@ var AdminService = {
           CreatedAt: nowIso_(), UpdatedAt: nowIso_()
         }]);
         SysLog.write(ctx.username, 'USER_CREATE', 'User', username, { role: p.RoleCode });
+        CacheUtil.remove(WorkService.USERS_KEY);
       }
       return AdminService.listUsers();
     });
@@ -2323,8 +2598,45 @@ var AdminService = {
 
   /* ------------------------------------------------------------- YEAR DATABASES */
   listYearDbs: function () {
-    return Db.readAll(T.YEAR_DBS).map(function (r) { return { Year: Number(r.Year), SpreadsheetId: r.SpreadsheetId, Mode: r.Mode || 'RW', Note: r.Note }; })
-      .sort(function (a, b) { return a.Year - b.Year; });
+    return Db.readAll(T.YEAR_DBS).map(function (r) {
+      var used = toNum_(r.UsedCells, 0);
+      return { Year: Number(r.Year), SpreadsheetId: r.SpreadsheetId, Mode: r.Mode || 'RW', Note: r.Note, UsedCells: used,
+               UsedPercent: Math.round(used / CAPACITY.MAX_CELLS * 1000) / 10, CheckedAt: r.CheckedAt };
+    }).sort(function (a, b) { return a.Year - b.Year; });
+  },
+
+  /** Tạo Google Sheet DB mới (năm mới hoặc DB nối tiếp khi đầy). p: { Year } */
+  createYearDb: function (p, ctx) {
+    required_(p, ['Year']);
+    var year = Number(p.Year);
+    if (year < 2000 || year > 2100) throw new AppError('VALIDATION', 'Năm không hợp lệ');
+    return withLock_(function () {
+      var row = YearDb.create(year, ctx.username);
+      return { created: row, list: AdminService.listYearDbs() };
+    });
+  },
+
+  refreshCapacity: function () {
+    withLock_(function () { YearDb.refreshCapacity(); });
+    return AdminService.listYearDbs();
+  },
+
+  /** p: { Province, wards: ['Phường A', 'Xã B', ...] } – thay toàn bộ danh mục phường/xã của tỉnh. */
+  saveWards: function (p, ctx) {
+    required_(p, ['Province']);
+    var pv = String(p.Province).trim();
+    var seen = {};
+    var list = (p.wards || []).map(function (w) { return String(w).replace(/\s+/g, ' ').trim(); })
+      .filter(function (w) { if (!w || seen[w.toUpperCase()]) return false; seen[w.toUpperCase()] = true; return true; });
+    return withLock_(function () {
+      var keep = Db.readAll(T.WARDS).filter(function (r) { return r.Province !== pv; })
+        .map(function (r) { return { Province: r.Province, WardName: r.WardName, SortOrder: r.SortOrder, IsActive: r.IsActive }; });
+      list.forEach(function (w, i) { keep.push({ Province: pv, WardName: w, SortOrder: i + 1, IsActive: true }); });
+      Db.replaceAll(T.WARDS, null, keep);
+      Catalog.invalidate();
+      SysLog.write(ctx.username, 'WARDS_SAVE', 'Wards', pv, { count: list.length });
+      return Catalog.get();
+    });
   },
 
   /** p: { SpreadsheetId } → kiểm tra quyền truy cập + bảng đang có. */
@@ -2348,15 +2660,20 @@ var AdminService = {
     var year = Number(p.Year);
     if (year < 2000 || year > 2100) throw new AppError('VALIDATION', 'Năm không hợp lệ');
     var id = AdminService.extractId_(p.SpreadsheetId);
-    var mode = String(p.Mode || 'RW').toUpperCase() === 'RO' ? 'RO' : 'RW';
+    var mode = DB_MODE[String(p.Mode || 'RW').toUpperCase()] || DB_MODE.RW;
     var test = AdminService.testYearDb({ SpreadsheetId: id });
     if (!test.ok) throw new AppError('DB_UNAVAILABLE', test.error);
     return withLock_(function () {
-      var cur = Db.findOne(T.YEAR_DBS, null, 'Year', String(year));
+      var cur = Db.findOne(T.YEAR_DBS, null, 'SpreadsheetId', id);
+      if (mode === DB_MODE.RW) {   // mỗi năm chỉ 1 DB nhận phiếu mới
+        Db.readAll(T.YEAR_DBS).forEach(function (r) {
+          if (Number(r.Year) === year && String(r.SpreadsheetId) !== id && String(r.Mode).toUpperCase() === DB_MODE.RW) Db.updateRow(T.YEAR_DBS, null, r._row, { Mode: DB_MODE.FULL });
+        });
+      }
       var row = { Year: year, SpreadsheetId: id, Mode: mode, Note: p.Note || ('DB_' + year) };
       if (cur) Db.updateRow(T.YEAR_DBS, null, cur._row, row); else Db.insert(T.YEAR_DBS, null, [row]);
       YearDb.invalidate();
-      if (mode === 'RW') {
+      if (mode !== DB_MODE.RO) {
         var ss = SpreadsheetApp.openById(id);
         [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { Db.ensureSheet(ss, t); });
       }
@@ -2441,6 +2758,178 @@ var AdminService = {
   }
 };
 
+/* ---- 11_Work.gs ---- */
+/**
+ * 11_Work.gs – Phân công phiếu cho nhân viên, màn "Việc của tôi", xuất danh sách công việc, báo cáo năng suất.
+ *
+ *  - Orders.AssignedTo = danh sách username phụ trách (phân cách dấu phẩy).
+ *  - Phân công KHÔNG thay đổi quyền tra cứu / báo cáo: tra cứu vẫn theo vai trò; báo cáo tổng luôn gồm toàn bộ phiếu.
+ *  - Nhân viên (quyền work.export) xuất danh sách phiếu mình phụ trách – KHÔNG có cột tiền.
+ *  - Admin (admin.users | '*') xem / xuất "Việc của tôi" của mọi nhân viên hoặc tất cả.
+ *  - Mỗi lần xuất ghi SystemLog (WORK_EXPORT).
+ */
+var WorkService = {
+  USERS_KEY: 'user_opts_v1',
+
+  /** Danh sách nhân viên đang hoạt động (cho ô chọn người phụ trách). */
+  userOptions: function () {
+    var c = CacheUtil.get(WorkService.USERS_KEY);
+    if (c) return c;
+    var roles = {};
+    Roles.all().forEach(function (r) { roles[r.RoleCode] = r.RoleName; });
+    var list = Db.readAll(T.USERS).filter(function (u) { return toBool_(u.IsActive); }).map(function (u) {
+      return { Username: String(u.Username), FullName: u.FullName, RoleCode: u.RoleCode, RoleName: roles[u.RoleCode] || u.RoleCode };
+    }).sort(function (a, b) { return String(a.FullName).localeCompare(String(b.FullName), 'vi'); });
+    CacheUtil.put(WorkService.USERS_KEY, list, CACHE.TTL_LONG);
+    return list;
+  },
+
+  /** Chuẩn hóa + kiểm tra danh sách username phụ trách. */
+  normAssignees: function (list) {
+    if (list === undefined || list === null || list === '') return [];
+    var arr = Array.isArray(list) ? list : String(list).split(',');
+    var valid = {};
+    WorkService.userOptions().forEach(function (u) { valid[u.Username] = true; });
+    var out = [];
+    arr.map(function (x) { return String(x).trim().toLowerCase(); }).filter(String).forEach(function (u) {
+      if (!valid[u]) throw new AppError('VALIDATION', 'Nhân viên không tồn tại hoặc đã khóa: ' + u);
+      if (out.indexOf(u) === -1) out.push(u);
+    });
+    return out;
+  },
+
+  isAdmin_: function (ctx) { return Auth.hasPerm(ctx, PERM.ADMIN_USERS); },
+
+  /** Người cần xem: nhân viên → chính mình; Admin → p.username ('' = tất cả phiếu có phân công, '*' = mọi phiếu). */
+  target_: function (p, ctx) {
+    if (!WorkService.isAdmin_(ctx)) return ctx.username;
+    return p.username === undefined ? ctx.username : String(p.username);
+  },
+
+  collect_: function (p, ctx) {
+    var to = toDateStr_(p.to) || todayStr_();
+    var from = toDateStr_(p.from) || addDays_(to, -90);
+    var who = WorkService.target_(p, ctx);
+    var status = p.status || 'PENDING';
+    var rows = [];
+    YearDb.idsInRange(from, to).forEach(function (db) {
+      var all;
+      try { all = Db.readAll(T.ORDERS, db); } catch (e) { return; }
+      all.forEach(function (o) {
+        var d = toDateStr_(o.OrderDate);
+        if (d < from || d > to || o.Status === ENUM.ORDER_STATUS.CANCELLED) return;
+        var asg = o.AssignedTo ? String(o.AssignedTo).split(',') : [];
+        if (who !== '*' && (who === '' ? !asg.length : asg.indexOf(who) === -1)) return;
+        var done = o.Status === ENUM.ORDER_STATUS.COMPLETED;
+        if (status === 'PENDING' && done) return;
+        if (status === 'DONE' && !done) return;
+        rows.push(o);
+      });
+    });
+    rows.sort(function (a, b) { return a.OrderID < b.OrderID ? 1 : -1; });
+    return { from: from, to: to, who: who, rows: rows };
+  },
+
+  /** p: { status: PENDING|DONE|ALL, from?, to?, username? (Admin) } */
+  list: function (p, ctx) {
+    var c = WorkService.collect_(p, ctx);
+    var counts = { PENDING: 0, DONE: 0 };
+    var all = WorkService.collect_(Object.assign({}, p, { status: 'ALL' }), ctx).rows;
+    all.forEach(function (o) { counts[o.Status === ENUM.ORDER_STATUS.COMPLETED ? 'DONE' : 'PENDING']++; });
+    return {
+      from: c.from, to: c.to, who: c.who, counts: counts, isAdmin: WorkService.isAdmin_(ctx),
+      rows: c.rows.slice(0, 500).map(function (o) { return WorkService.workView_(o); })
+    };
+  },
+
+  /** Bản ghi công việc – không chứa thông tin tiền. */
+  workView_: function (o) {
+    var tat = WorkService.tatHours_(o);
+    return {
+      OrderID: o.OrderID, OrderDate: toDateStr_(o.OrderDate), PatientID: o.PatientID, PatientName: o.PatientName,
+      Gender: o.Gender, Age: toNum_(o.Age), Phone: o.Phone, DoctorName: o.DoctorName, PanelCodes: o.PanelCodes,
+      Status: o.Status, AssignedTo: o.AssignedTo ? String(o.AssignedTo).split(',') : [],
+      CreatedAt: o.CreatedAt, FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || '', TatHours: tat
+    };
+  },
+
+  tatHours_: function (o) {
+    if (!o.CompletedAt || !o.CreatedAt) return null;
+    var a = WorkService.ts_(o.CreatedAt), b = WorkService.ts_(o.CompletedAt);
+    return (a && b && b >= a) ? Math.round((b - a) / 360000) / 10 : null;
+  },
+
+  ts_: function (s) {
+    var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() : null;
+  },
+
+  /** p: { status, from, to, username? (Admin), includeResults? } → dữ liệu xuất Excel (không có cột tiền). */
+  exportData: function (p, ctx) {
+    var c = WorkService.collect_(p, ctx);
+    var users = {};
+    WorkService.userOptions().forEach(function (u) { users[u.Username] = u.FullName; });
+    var rows = c.rows.map(function (o) {
+      var v = WorkService.workView_(o);
+      v.AssignedNames = v.AssignedTo.map(function (u) { return users[u] || u; }).join(', ');
+      return v;
+    });
+    var results = [];
+    if (p.includeResults && rows.length) {
+      var ids = {};
+      rows.forEach(function (r) { ids[r.OrderID] = true; });
+      var tm = Catalog.testMap();
+      YearDb.idsInRange(c.from, c.to).forEach(function (db) {
+        try {
+          Db.readAll(T.RESULTS, db).forEach(function (r) {
+            if (!ids[r.OrderID]) return;
+            results.push({ OrderID: r.OrderID, OrderDate: toDateStr_(r.OrderDate), PatientID: r.PatientID, PanelCode: r.PanelCode,
+                           TestCode: r.TestCode, TestName: (tm[r.TestCode] || {}).TestName || r.TestCode, Value: r.Value, Unit: r.Unit,
+                           RefText: r.RefText, Flag: r.Flag });
+          });
+        } catch (e) { /* skip */ }
+      });
+    }
+    SysLog.write(ctx.username, 'WORK_EXPORT', 'Work', c.who || '(all)', { from: c.from, to: c.to, status: p.status || 'PENDING', orders: rows.length });
+    return { from: c.from, to: c.to, who: c.who, whoName: users[c.who] || (c.who === '*' ? 'Tất cả phiếu' : (c.who === '' ? 'Tất cả nhân viên' : c.who)),
+             rows: rows, results: results };
+  },
+
+  /** Báo cáo năng suất theo nhân viên. p: { from, to } */
+  productivity: function (p) {
+    var to = toDateStr_(p.to) || todayStr_();
+    var from = toDateStr_(p.from) || (to.substring(0, 8) + '01');
+    var users = {};
+    WorkService.userOptions().forEach(function (u) { users[u.Username] = u.FullName; });
+    var stat = {};
+    var unassigned = 0;
+    YearDb.idsInRange(from, to).forEach(function (db) {
+      var all;
+      try { all = Db.readAll(T.ORDERS, db); } catch (e) { return; }
+      all.forEach(function (o) {
+        var d = toDateStr_(o.OrderDate);
+        if (d < from || d > to || o.Status === ENUM.ORDER_STATUS.CANCELLED) return;
+        var asg = o.AssignedTo ? String(o.AssignedTo).split(',').filter(String) : [];
+        if (!asg.length) { unassigned++; return; }
+        var tat = WorkService.tatHours_(o);
+        asg.forEach(function (u) {
+          var s = stat[u] = stat[u] || { username: u, fullName: users[u] || u, assigned: 0, completed: 0, pending: 0, tats: [] };
+          s.assigned++;
+          if (o.Status === ENUM.ORDER_STATUS.COMPLETED) s.completed++; else s.pending++;
+          if (tat !== null) s.tats.push(tat);
+        });
+      });
+    });
+    var rows = Object.keys(stat).map(function (k) {
+      var s = stat[k], t = s.tats.slice().sort(function (a, b) { return a - b; });
+      return { username: s.username, fullName: s.fullName, assigned: s.assigned, completed: s.completed, pending: s.pending,
+               avgTatHours: t.length ? Math.round(t.reduce(function (a, b) { return a + b; }, 0) / t.length * 10) / 10 : null,
+               medianTatHours: t.length ? t[Math.floor(t.length / 2)] : null };
+    }).sort(function (a, b) { return b.assigned - a.assigned; });
+    return { from: from, to: to, rows: rows, unassigned: unassigned };
+  }
+};
+
 /* ---- 90_Setup.gs ---- */
 /**
  * 90_Setup.gs – Khởi tạo hệ thống (chạy thủ công trong Apps Script Editor).
@@ -2456,7 +2945,7 @@ function setup() {
   if (!props.getProperty(PROP.PATIENT_DB_ID)) props.setProperty(PROP.PATIENT_DB_ID, DEFAULT_IDS.PATIENT_DB_ID);
 
   var cfg = SpreadsheetApp.openById(props.getProperty(PROP.CONFIG_DB_ID));
-  [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS, T.YEAR_DBS, T.SEQUENCES, T.SYS_LOG]
+  [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS, T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG]
     .forEach(function (t) { Db.ensureSheet(cfg, t); });
   Db.ensureSheet(SpreadsheetApp.openById(props.getProperty(PROP.PATIENT_DB_ID)), T.PATIENTS);
 
@@ -2478,6 +2967,7 @@ function setup() {
     { Key: 'FOLLOWUP_PRESETS', Value: '7,14,30,90,180', Description: 'Gợi ý số ngày tái khám' },
     { Key: 'SESSION_HOURS', Value: '6', Description: 'Thời hạn phiên đăng nhập (giờ, tối đa 6)' }
   ]);
+  addSettingIfMissing_('AUTO_CREATE_YEAR_DB', 'TRUE', 'TRUE = tự tạo Google Sheet DB_<năm> khi sang năm mới / DB đầy');
 
   seedIfEmpty_(T.ROLES, [
     { RoleCode: 'ADMIN', RoleName: 'Quản trị hệ thống', Permissions: '*', IsSystem: true },
@@ -2485,21 +2975,22 @@ function setup() {
         PERM.ORDER_CREATE, PERM.ORDER_VIEW, PERM.ORDER_EDIT, PERM.ORDER_CANCEL, PERM.PRICE_OVERRIDE, PERM.RESULT_ENTER,
         PERM.HISTORY_VIEW, PERM.PRINT, PERM.PATIENT_EDIT, PERM.FOLLOWUP_VIEW, PERM.REPORT_REVENUE, PERM.REPORT_EXPORT].join(',') },
     { RoleCode: 'TECH', RoleName: 'Kỹ thuật viên xét nghiệm', IsSystem: true, Permissions: [
-        PERM.ORDER_VIEW, PERM.RESULT_ENTER, PERM.HISTORY_VIEW, PERM.PRINT, PERM.FOLLOWUP_VIEW].join(',') },
+        PERM.ORDER_VIEW, PERM.RESULT_ENTER, PERM.HISTORY_VIEW, PERM.PRINT, PERM.FOLLOWUP_VIEW, PERM.WORK_EXPORT].join(',') },
     { RoleCode: 'RECEPTION', RoleName: 'Tiếp nhận / Thu ngân', IsSystem: true, Permissions: [
-        PERM.ORDER_CREATE, PERM.ORDER_VIEW, PERM.ORDER_EDIT, PERM.PRINT, PERM.PATIENT_EDIT, PERM.FOLLOWUP_VIEW].join(',') }
+        PERM.ORDER_CREATE, PERM.ORDER_VIEW, PERM.ORDER_EDIT, PERM.PRINT, PERM.PATIENT_EDIT, PERM.FOLLOWUP_VIEW, PERM.WORK_EXPORT].join(',') }
   ]);
 
   seedIfEmpty_(T.LOOKUPS, []
     .concat(['Negative', 'Positive'].map(function (v, i) { return { ListCode: 'QUAL', Value: v, SortOrder: i + 1 }; }))
     .concat(['A Rh+', 'B Rh+', 'AB Rh+', 'O Rh+', 'A Rh-', 'B Rh-', 'AB Rh-', 'O Rh-'].map(function (v, i) { return { ListCode: 'BLOOD', Value: v, SortOrder: i + 1 }; }))
     .concat(['Nam', 'Nữ'].map(function (v, i) { return { ListCode: 'GENDER', Value: v, SortOrder: i + 1 }; }))
-    .concat(['Gia Lai', 'Kon Tum', 'Đắk Lắk', 'Bình Định', 'Quảng Ngãi'].map(function (v, i) { return { ListCode: 'PROVINCE', Value: v, SortOrder: i + 1 }; })));
+    .concat(['Gia Lai', 'Quảng Ngãi', 'Đắk Lắk', 'Khánh Hòa', 'Lâm Đồng'].map(function (v, i) { return { ListCode: 'PROVINCE', Value: v, SortOrder: i + 1 }; })));
 
   seedIfEmpty_(T.DOCTORS, ['KT SỨC KHỎE', 'BS NGHĨA', 'BS SƠN', 'BS TOÁN', 'BS ANH', 'BS TÙNG', 'BS THỊNH', 'BS CHÂU', 'BS THANH']
     .map(function (n, i) { return { DoctorName: n, IsActive: true, SortOrder: i + 1 }; }));
 
   seedIfEmpty_(T.YEAR_DBS, DEFAULT_IDS.YEAR_DBS);
+  seedIfEmpty_(T.WARDS, SEED_WARDS_GIA_LAI.split('|').map(function (w, i) { return { Province: 'Gia Lai', WardName: w, SortOrder: i + 1, IsActive: true }; }));
   seedIfEmpty_(T.PANELS, SEED_CATALOG.panels);
   seedIfEmpty_(T.TESTS, SEED_CATALOG.tests);
   seedIfEmpty_(T.PANEL_TESTS, SEED_CATALOG.panelTests);
@@ -2517,14 +3008,58 @@ function setup() {
   // Year DB schemas
   AdminService.clearCache();
   YearDb.all().forEach(function (y) {
-    if (y.Mode !== 'RW') return;
+    if (y.Mode === 'RO') return;
     var ss = SpreadsheetApp.openById(y.SpreadsheetId);
     [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { Db.ensureSheet(ss, t); });
   });
 
+  installTriggers();
+  try { YearDb.refreshCapacity(); } catch (e) { console.warn('Capacity: ' + e.message); }
   SysLog.write('system', 'SETUP', 'System', APP.VERSION, {});
   console.log('✅ Setup hoàn tất. Đăng nhập: admin / Admin@123 (bắt buộc đổi mật khẩu).');
   return healthCheck();
+}
+
+/** 135 phường/xã tỉnh Gia Lai (mới, từ 01/07/2025). Admin chỉnh trong Quản trị → Phường/Xã. */
+var SEED_WARDS_GIA_LAI = 'Phường Quy Nhơn|Phường Quy Nhơn Đông|Phường Quy Nhơn Tây|Phường Quy Nhơn Nam|Phường Quy Nhơn Bắc|Phường Bình Định|Phường An Nhơn|Phường An Nhơn Đông|Phường An Nhơn Nam|Phường An Nhơn Bắc|Phường Bồng Sơn|Phường Hoài Nhơn|Phường Tam Quan|Phường Hoài Nhơn Đông|Phường Hoài Nhơn Tây|Phường Hoài Nhơn Nam|Phường Hoài Nhơn Bắc|Phường Pleiku|Phường Hội Phú|Phường Thống Nhất|Phường Diên Hồng|Phường An Phú|Phường An Khê|Phường An Bình|Phường Ayun Pa|Xã An Nhơn Tây|Xã Phù Cát|Xã Xuân An|Xã Ngô Mây|Xã Cát Tiến|Xã Đề Gi|Xã Hòa Hội|Xã Hội Sơn|Xã Phù Mỹ|Xã An Lương|Xã Bình Dương|Xã Phù Mỹ Đông|Xã Phù Mỹ Tây|Xã Phù Mỹ Nam|Xã Phù Mỹ Bắc|Xã Tuy Phước|Xã Tuy Phước Đông|Xã Tuy Phước Tây|Xã Tuy Phước Bắc|Xã Tây Sơn|Xã Bình Khê|Xã Bình Phú|Xã Bình Hiệp|Xã Bình An|Xã Hoài Ân|Xã Ân Tường|Xã Kim Sơn|Xã Vạn Đức|Xã Ân Hảo|Xã Vân Canh|Xã Canh Vinh|Xã Canh Liên|Xã Vĩnh Thạnh|Xã Vĩnh Thịnh|Xã Vĩnh Quang|Xã Vĩnh Sơn|Xã An Hòa|Xã An Lão|Xã An Vinh|Xã An Toàn|Xã Biển Hồ|Xã Gào|Xã Ia Ly|Xã Chư Păh|Xã Ia Khươl|Xã Ia Phí|Xã Chư Prông|Xã Bàu Cạn|Xã Ia Boòng|Xã Ia Lâu|Xã Ia Pia|Xã Ia Tôr|Xã Chư Sê|Xã Bờ Ngoong|Xã Ia Ko|Xã Al Bá|Xã Chư Pưh|Xã Ia Le|Xã Ia Hrú|Xã Cửu An|Xã Đak Pơ|Xã Ya Hội|Xã Kbang|Xã Kông Bơ La|Xã Tơ Tung|Xã Sơn Lang|Xã Đak Rong|Xã Kông Chro|Xã Ya Ma|Xã Chư Krey|Xã SRó|Xã Đăk Song|Xã Chơ Long|Xã Ia Rbol|Xã Ia Sao|Xã Phú Thiện|Xã Chư A Thai|Xã Ia Hiao|Xã Pờ Tó|Xã Ia Pa|Xã Ia Tul|Xã Phú Túc|Xã Ia Dreh|Xã Ia Rsai|Xã Uar|Xã Đak Đoa|Xã Kon Gang|Xã Ia Băng|Xã KDang|Xã Đak Sơmei|Xã Mang Yang|Xã Lơ Pang|Xã Kon Chiêng|Xã Hra|Xã Ayun|Xã Ia Grai|Xã Ia Krái|Xã Ia Hrung|Xã Đức Cơ|Xã Ia Dơk|Xã Ia Krêl|Xã Ia O|Xã Nhơn Châu|Xã Ia Púch|Xã Ia Mơ|Xã Ia Pnôn|Xã Ia Nan|Xã Ia Dom|Xã Ia Chia|Xã Krong';
+
+function addSettingIfMissing_(key, value, desc) {
+  if (!Db.findOne(T.SETTINGS, null, 'Key', key)) Db.insert(T.SETTINGS, null, [{ Key: key, Value: value, Description: desc }]);
+}
+
+/**
+ * Trigger nền:
+ *  - warmup()      mỗi 10 phút: giữ cache danh mục / cấu hình / danh bạ BN luôn sẵn → request của user nhanh hơn.
+ *  - maintenance() 01:00 hằng ngày: đo dung lượng DB, tự tạo DB nối tiếp khi ≥ 85%, tạo sẵn DB năm sau từ 15/12.
+ */
+function installTriggers() {
+  var have = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  if (have.indexOf('warmup') === -1) ScriptApp.newTrigger('warmup').timeBased().everyMinutes(10).create();
+  if (have.indexOf('maintenance') === -1) ScriptApp.newTrigger('maintenance').timeBased().everyDays(1).atHour(1).create();
+}
+
+function warmup() {
+  try {
+    Settings.all(); Roles.all(); Catalog.get(); YearDb.all();
+    PatientService.index({});
+    var y = new Date().getFullYear();
+    var act = YearDb.active(y);
+    if (act) Db.readAll(T.ORDERS, act.SpreadsheetId);
+  } catch (e) { console.warn('warmup: ' + e.message); }
+}
+
+function maintenance() {
+  withLock_(function () {
+    var list = YearDb.refreshCapacity();
+    var auto = String(Settings.get('AUTO_CREATE_YEAR_DB', 'TRUE')).toUpperCase() !== 'FALSE';
+    if (!auto) return;
+    var now = new Date(), y = now.getFullYear();
+    // DB đang ghi vượt ngưỡng → tạo DB nối tiếp
+    list.filter(function (r) { return r.Mode === DB_MODE.RW && r.UsedCells / CAPACITY.MAX_CELLS * 100 >= CAPACITY.ROLLOVER_PERCENT; })
+      .forEach(function (r) { YearDb.create(r.Year, 'system'); });
+    // Từ 15/12: tạo sẵn DB năm sau
+    if (now.getMonth() === 11 && now.getDate() >= 15 && !YearDb.forYear(y + 1).length) YearDb.create(y + 1, 'system');
+  });
 }
 
 function seedIfEmpty_(table, rows) {
@@ -2543,7 +3078,7 @@ function migrationFinalize() {
     var perDay = {};
     YearDb.all().forEach(function (y) {
       try {
-        Db.readColumns(T.ORDERS, y.Year, ['OrderID']).forEach(function (r) {
+        Db.readColumns(T.ORDERS, y.SpreadsheetId, ['OrderID']).forEach(function (r) {
           var m = String(r.OrderID).match(/^XN-(\d{6})-(\d+)$/);
           if (m) perDay[m[1]] = Math.max(perDay[m[1]] || 0, Number(m[2]));
         });
@@ -2563,7 +3098,7 @@ function healthCheck() {
   check('CONFIG DB', function () { return Db.readAll(T.USERS).length + ' users, ' + Db.readAll(T.TESTS).length + ' tests'; });
   check('PATIENT DB', function () { return Db.readColumns(T.PATIENTS, null, ['PatientID']).length + ' bệnh nhân'; });
   YearDb.all().forEach(function (y) {
-    check('DB_' + y.Year + ' (' + y.Mode + ')', function () { return Db.readColumns(T.ORDERS, y.Year, ['OrderID']).length + ' phiếu'; });
+    check((y.Note || 'DB_' + y.Year) + ' (' + y.Mode + ')', function () { return Db.readColumns(T.ORDERS, y.SpreadsheetId, ['OrderID']).length + ' phiếu'; });
   });
   console.log(report.join('\n'));
   return report;

@@ -76,6 +76,7 @@
           var follow = Math.random() < 0.3 ? pick([7, 14, 30, 60, 90]) : 0;
           try {
             OrderService.create({ patientId: pt.PatientID, orderDate: ds, doctorName: pick(doctors), panels: panels,
+              assignedTo: Math.random() < 0.8 ? [pick(['ktv', 'ktv', 'bacsi'])] : [],
               followUpDays: follow, paymentStatus: Math.random() < 0.85 ? 'PAID' : 'UNPAID',
               discount: Math.random() < 0.1 ? 20000 : 0, results: res }, ctx);
           } catch (e) { console.warn('seed order skipped', e.message); }

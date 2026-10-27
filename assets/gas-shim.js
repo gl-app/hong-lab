@@ -159,6 +159,7 @@
     return m;
   };
   Sheet.prototype.getMaxRows = function () { return Math.max(1000, this.data.length + 1); };
+  Sheet.prototype.getMaxColumns = function () { return Math.max(26, this.getLastColumn()); };
   Sheet.prototype.getRange = function (r, c, nr, nc) { return new Range(this, r, c, nr, nc); };
   Sheet.prototype.deleteRow = function (r) { this.data.splice(r - 1, 1); STORE.dirty = true; };
   Sheet.prototype.insertRowsAfter = function () { return this; };
@@ -170,6 +171,7 @@
   Spreadsheet.prototype.getUrl = function () { return 'https://docs.google.com/spreadsheets/d/' + this.id; };
   Spreadsheet.prototype.getSheetByName = function (n) { return this.sheets[n] || null; };
   Spreadsheet.prototype.insertSheet = function (n) { var s = new Sheet(this, n); this.sheets[n] = s; this.order.push(n); STORE.dirty = true; return s; };
+  Spreadsheet.prototype.deleteSheet = function (sh) { delete this.sheets[sh.name]; this.order = this.order.filter(function (n) { return n !== sh.name; }); };
   Spreadsheet.prototype.getSheets = function () { var self = this; return this.order.map(function (n) { return self.sheets[n]; }); };
 
   var SpreadsheetApp = {
@@ -177,8 +179,21 @@
       if (!STORE.spreadsheets[id]) STORE.spreadsheets[id] = new Spreadsheet(id);
       return STORE.spreadsheets[id];
     },
-    flush: function () {}
+    flush: function () {},
+    create: function (name) {
+      var id = 'demo' + Utilities.getUuid().replace(/-/g, '') + 'x';
+      var ss = SpreadsheetApp.openById(id);
+      ss.insertSheet('Sheet1');
+      ss.title = name;
+      return ss;
+    }
   };
+  var fakeFile = { getParents: function () { return { hasNext: function () { return false; } }; }, moveTo: function () {} };
+  var triggers = [];
+  var tb = function (fn) { var b = { timeBased: function () { return b; }, everyMinutes: function () { return b; }, everyDays: function () { return b; }, atHour: function () { return b; },
+    create: function () { triggers.push({ getHandlerFunction: function () { return fn; } }); } }; return b; };
+  global.ScriptApp = global.ScriptApp || { getProjectTriggers: function () { return triggers; }, newTrigger: tb, getOAuthToken: function () { return ''; } };
+  global.DriveApp = global.DriveApp || { getFileById: function () { return fakeFile; } };
 
   /* ------------------------------------------------------------- Cache / Lock / Properties */
   function makeCache() {

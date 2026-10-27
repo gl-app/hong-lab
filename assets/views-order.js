@@ -9,6 +9,7 @@
   function patientFormHtml(p) {
     p = p || {};
     var provinces = App.lookup('PROVINCE');
+    var pv = p.Province || provinces[0] || '';
     return '<form id="pt-form" class="row g-2">' +
       '<input type="hidden" name="PatientID" value="' + esc(p.PatientID || '') + '">' +
       '<div class="col-12"><label class="form-label">Họ và tên *</label><input class="form-control" name="FullName" required value="' + esc(p.FullName || '') + '" style="text-transform:uppercase"></div>' +
@@ -16,13 +17,26 @@
         ['Nam', 'Nữ'].map(function (g) { return '<option' + (p.Gender === g ? ' selected' : '') + '>' + g + '</option>'; }).join('') + '</select></div>' +
       '<div class="col-6 col-md-4"><label class="form-label">Năm sinh</label><input class="form-control" name="BirthYear" inputmode="numeric" maxlength="4" value="' + esc(p.BirthYear || '') + '" placeholder="vd 1980"></div>' +
       '<div class="col-6 col-md-4"><label class="form-label">hoặc Tuổi</label><input class="form-control" name="Age" inputmode="numeric" maxlength="3"></div>' +
-      '<div class="col-6 col-md-6"><label class="form-label">Số điện thoại</label><input class="form-control" name="Phone" inputmode="tel" value="' + esc(p.Phone || '') + '"></div>' +
-      '<div class="col-12 col-md-6"><label class="form-label">Phường / Xã</label><input class="form-control" name="Ward" value="' + esc(p.Ward || '') + '"></div>' +
-      '<div class="col-12 col-md-8"><label class="form-label">Địa chỉ (số nhà, đường, thôn…)</label><input class="form-control" name="Address" value="' + esc(p.Address || '') + '"></div>' +
-      '<div class="col-12 col-md-4"><label class="form-label">Tỉnh / TP</label><input class="form-control" name="Province" list="dl-province" value="' + esc(p.Province || provinces[0] || '') + '">' +
+      '<div class="col-12 col-md-6"><label class="form-label">Số điện thoại</label><input class="form-control" name="Phone" inputmode="tel" value="' + esc(p.Phone || '') + '"></div>' +
+      '<div class="col-12 col-md-6"><label class="form-label">Tỉnh / TP</label><input class="form-control" name="Province" list="dl-province" value="' + esc(pv) + '" autocomplete="off">' +
         '<datalist id="dl-province">' + provinces.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('') + '</datalist></div>' +
+      '<div class="col-12 col-md-6"><label class="form-label">Phường / Xã</label><input class="form-control" name="Ward" list="dl-ward" value="' + esc(p.Ward || '') + '" placeholder="Gõ để chọn…" autocomplete="off">' +
+        '<datalist id="dl-ward">' + wardOptions(pv) + '</datalist></div>' +
+      '<div class="col-12 col-md-6"><label class="form-label">Địa chỉ (số nhà, đường, thôn…)</label><input class="form-control" name="Address" value="' + esc(p.Address || '') + '"></div>' +
       '</form>';
   }
+  function wardOptions(province) {
+    return ((App.state.catalog.wards || {})[province] || []).map(function (w) { return '<option value="' + esc(w) + '">'; }).join('');
+  }
+  /** Đổi tỉnh → nạp lại gợi ý phường/xã. Gọi 1 lần cho container chứa form. */
+  function bindPatientForm(root) {
+    root.addEventListener('input', function (e) {
+      if (e.target.name !== 'Province') return;
+      var dl = root.querySelector('#dl-ward');
+      if (dl) dl.innerHTML = wardOptions(e.target.value.trim());
+    });
+  }
+  App.bindPatientForm = bindPatientForm;
 
   function patientLine(p) {
     var age = p.BirthYear ? (new Date().getFullYear() - p.BirthYear) + ' tuổi' : '';
@@ -103,6 +117,7 @@
           '<div class="col-sm-4"><label class="form-label">Ngày khám</label><input type="date" class="form-control" id="o-date" value="' + U.today() + '"></div>' +
           '<div class="col-sm-8"><label class="form-label">Bác sĩ chỉ định</label><input class="form-control" id="o-doctor" list="dl-doctor" value="' + esc(App.setting('DEFAULT_DOCTOR', '')) + '">' +
             '<datalist id="dl-doctor">' + App.state.catalog.doctors.filter(function (d) { return d.IsActive; }).map(function (d) { return '<option value="' + esc(d.DoctorName) + '">'; }).join('') + '</datalist></div>' +
+          '<div class="col-12"><label class="form-label">Người phụ trách <span class="text-muted">(mặc định là bạn – bấm để chọn thêm / đổi người khác)</span></label><div id="o-assign"></div></div>' +
         '</div>' +
         '<label class="form-label">Nhóm xét nghiệm <span class="text-muted">(chọn nhiều)</span></label>' +
         '<div class="panel-grid mb-2" id="panel-grid">' + App.activePanels().map(function (p) {
@@ -129,6 +144,8 @@
         '<button class="btn btn-primary px-4" id="o-save"><i class="bi bi-check2-circle"></i> Lưu phiếu</button></div>' +
       '</div></div>';
 
+    var assignPicker = App.assigneePicker(U.$('#o-assign', view), [App.state.user.username]);   // mặc định: người đang đăng nhập
+
     /* ---------- Patient box */
     var ptBox = U.$('#pt-box', view);
     function renderPatientSearch(results, q) {
@@ -142,16 +159,22 @@
         '<button class="btn btn-outline-primary w-100" id="pt-new"><i class="bi bi-person-plus"></i> Bệnh nhân mới</button>';
       var qi = U.$('#pt-q', ptBox);
       qi.focus();
+      // Tìm tức thì trên danh bạ BN đã tải về trình duyệt (App.Patients) – không gọi server mỗi lần gõ
       var doSearch = U.debounce(function () {
+        var box = U.$('#pt-results', ptBox);
+        if (!box || !U.$('#pt-by', ptBox)) return;            // đã chọn BN / đổi màn hình
         var q2 = qi.value.trim(), by = U.$('#pt-by', ptBox).value.trim(), ward = U.$('#pt-ward', ptBox).value.trim();
-        if (q2.length < 2 && !by) { U.$('#pt-results', ptBox).innerHTML = ''; return; }
-        U.api('patient.search', { q: q2, birthYear: by, ward: ward }, { silent: true }).then(function (d) {
-          U.$('#pt-results', ptBox).innerHTML = d.rows.length ? (d.total > d.rows.length ? '<div class="small text-muted">Hiển thị ' + d.rows.length + '/' + d.total + ' kết quả</div>' : '') +
+        if (q2.length < 2 && !by && !ward) { box.innerHTML = ''; return; }
+        if (!App.Patients.ready()) box.innerHTML = '<div class="small text-muted text-center py-2"><span class="spinner-border spinner-border-sm"></span> Đang tải danh bạ bệnh nhân…</div>';
+        App.Patients.load().then(function () {
+          if (!U.$('#pt-results', ptBox) || !U.$('#pt-by', ptBox)) return;
+          var d = App.Patients.search(qi.value.trim(), U.$('#pt-by', ptBox).value.trim(), U.$('#pt-ward', ptBox).value.trim(), 30);
+          box.innerHTML = d.rows.length ? (d.total > d.rows.length ? '<div class="small text-muted">Hiển thị ' + d.rows.length + '/' + d.total + ' kết quả</div>' : '') +
             d.rows.map(function (p) { return '<div class="patient-item" data-pid="' + esc(p.PatientID) + '">' + patientLine(p) + '</div>'; }).join('')
             : '<div class="text-muted small text-center py-2">Không tìm thấy. Bấm "Bệnh nhân mới" để tạo.</div>';
           st._rows = d.rows;
-        }).catch(function () {});
-      }, 300);
+        }).catch(function () { box.innerHTML = '<div class="text-danger small text-center py-2">Không tải được danh bạ bệnh nhân.</div>'; });
+      }, 120);
       ['#pt-q', '#pt-by', '#pt-ward'].forEach(function (s) { U.$(s, ptBox).addEventListener('input', doSearch); });
       if (q) doSearch();
     }
@@ -178,6 +201,7 @@
       st._dupForce = !!dupMatches;
       st._rows = dupMatches || st._rows;
       U.$('[name=FullName]', ptBox).focus();
+      if (!ptBox._pfBound) { bindPatientForm(ptBox); ptBox._pfBound = true; }
     }
     U.on(ptBox, 'click', '.patient-item', function (e, el) {
       var pid = el.getAttribute('data-pid');
@@ -186,7 +210,7 @@
     });
     U.on(ptBox, 'click', '#pt-new', function () {
       var q = (U.$('#pt-q', ptBox) || {}).value || '';
-      var pre = /^[\d\s.+-]{6,}$/.test(q) ? { Phone: q } : { FullName: q };
+      var pre = /^[\d\s.+-]{3,}$/.test(q) ? { Phone: q } : { FullName: q };
       renderPatientForm(pre);
     });
     U.on(ptBox, 'click', '#pt-change', function () { st.patient = null; renderPatientSearch(); refreshResults(); });
@@ -200,6 +224,7 @@
       U.api('patient.save', d).then(function (r) {
         if (r.duplicate) { renderPatientForm(d, r.matches); return; }
         st.patient = r.patient;
+        App.Patients.upsert(r.patient);
         U.toast(d.PatientID ? 'Đã cập nhật bệnh nhân' : 'Đã tạo bệnh nhân ' + r.patient.PatientID);
         renderPatientSelected();
       }).catch(function () {});
@@ -264,6 +289,14 @@
     }
     if (canResult) {
       U.$('#o-withres', view).addEventListener('change', refreshResults);
+      // Chỉ số có ở nhiều nhóm (vd ALT ∈ SH & GD): nhập 1 chỗ → các ô cùng chỉ số tự điền theo
+      U.$('#res-box', view).addEventListener('input', function (e) {
+        var el = e.target.closest('.res-input');
+        if (!el) return;
+        U.$$('#res-box .res-input[data-test="' + el.getAttribute('data-test') + '"]', view).forEach(function (o) {
+          if (o !== el && o.value !== el.value) { o.value = el.value; updateFlag(o, st.patient ? st.patient.Gender : 'Nam'); }
+        });
+      });
       bindResultInputs(U.$('#res-box', view), function () { return st.patient ? st.patient.Gender : 'Nam'; });
     }
 
@@ -301,7 +334,7 @@
       var empty = codes.filter(function (c) { return !st.panels[c].tests.length; });
       if (empty.length) { U.toast('Nhóm ' + empty.join(', ') + ' chưa chọn chỉ số nào', 'warn'); return; }
       var payload = {
-        patientId: st.patient.PatientID, orderDate: U.$('#o-date', view).value, doctorName: U.$('#o-doctor', view).value,
+        patientId: st.patient.PatientID, orderDate: U.$('#o-date', view).value, doctorName: U.$('#o-doctor', view).value, assignedTo: assignPicker.get(),
         panels: codes.map(function (c) { return { panelCode: c, tests: st.panels[c].tests }; }),
         discount: Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0,
         paymentStatus: U.$('#o-pay', view).value, followUpDays: Number(U.$('#o-follow', view).value) || 0, note: U.$('#o-note', view).value
@@ -353,17 +386,18 @@
       var d = U.formData(form);
       App._searchState = d;
       U.$('#s-result', view).innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
-      U.api('order.search', d).then(function (r) {
+      Promise.all([U.api('order.search', d), App.Users.load().catch(function () { return []; })]).then(function (res) {
+        var r = res[0];
         if (!r.rows.length) { U.$('#s-result', view).innerHTML = U.empty('Không có phiếu phù hợp'); return; }
         var money = r.rows[0].NetAmount !== null;
         U.$('#s-result', view).innerHTML = '<div class="card-header justify-content-between"><span>' + r.total + ' phiếu</span>' +
           (r.total > r.rows.length ? '<span class="small text-muted">Hiển thị ' + r.rows.length + ' phiếu mới nhất</span>' : '') + '</div>' +
-          '<div class="table-wrap"><table class="table table-hover"><thead><tr><th>Mã phiếu</th><th>Ngày</th><th>Bệnh nhân</th><th>SĐT</th><th>Nhóm XN</th><th>BS chỉ định</th>' +
+          '<div class="table-wrap"><table class="table table-hover"><thead><tr><th>Mã phiếu</th><th>Ngày</th><th>Bệnh nhân</th><th>SĐT</th><th>Nhóm XN</th><th>BS chỉ định</th><th>Phụ trách</th>' +
           (money ? '<th class="text-end">Thành tiền</th>' : '') + '<th>Trạng thái</th></tr></thead><tbody>' +
           r.rows.map(function (o) {
             return '<tr data-id="' + o.OrderID + '"><td class="mono fw-semibold">' + o.OrderID + (o.LegacyCode ? '<div class="small text-muted">' + esc(o.LegacyCode) + '</div>' : '') + '</td><td>' + U.vnDate(o.OrderDate) + '</td>' +
               '<td><div class="fw-medium">' + esc(o.PatientName) + '</div><div class="small text-muted">' + esc([o.Gender, o.Age !== null ? o.Age + 't' : ''].filter(String).join(' · ')) + '</div></td>' +
-              '<td>' + esc(o.Phone || '') + '</td><td>' + U.chips(o.PanelCodes) + '</td><td class="small">' + esc(o.DoctorName || '') + '</td>' +
+              '<td>' + esc(o.Phone || '') + '</td><td>' + U.chips(o.PanelCodes) + '</td><td class="small">' + esc(o.DoctorName || '') + '</td><td class="small">' + esc(App.Users.names(o.AssignedTo)) + '</td>' +
               (money ? '<td class="text-end tabular">' + U.money(o.NetAmount) + '</td>' : '') + '<td>' + U.badge(o.Status) + '</td></tr>';
           }).join('') + '</tbody></table></div>';
       }).catch(function () { U.$('#s-result', view).innerHTML = U.empty('Lỗi tải dữ liệu', 'bi-exclamation-triangle'); });
@@ -399,7 +433,8 @@
 
       view.innerHTML =
         '<div class="d-flex align-items-center gap-2 mb-3 flex-wrap"><a href="#/order-search" class="btn btn-sm btn-light"><i class="bi bi-arrow-left"></i></a>' +
-          '<h4 class="mb-0 mono fw-bold">' + o.OrderID + '</h4>' + U.badge(o.Status) + (money ? U.badge(o.PaymentStatus) : '') +
+          '<h4 class="mb-0 mono fw-bold">' + o.OrderID + '</h4>' + U.badge(o.Status) +
+          (money ? (App.can('order.edit') && !cancelled ? '<button class="btn p-0 border-0" id="pay-toggle" title="Bấm để đổi trạng thái thanh toán">' + U.badge(o.PaymentStatus) + '</button>' : U.badge(o.PaymentStatus)) : '') +
           '<div class="ms-auto d-flex gap-2 flex-wrap">' +
           (App.can('print') && !cancelled ? '<div class="btn-group"><button class="btn btn-primary" id="d-qprint"><i class="bi bi-printer"></i> In nhanh</button>' +
             '<button class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Thêm"></button><ul class="dropdown-menu dropdown-menu-end">' +
@@ -414,7 +449,9 @@
             '<div class="small text-muted">' + esc(o.Address || '') + '</div></div><div class="text-end mono small">' + esc(o.PatientID) + '</div></div>' +
             '<hr class="my-2"><div class="row small g-2"><div class="col-sm-4"><div class="text-muted">Ngày khám</div><b>' + U.vnDate(o.OrderDate) + '</b></div>' +
             '<div class="col-sm-4"><div class="text-muted">BS chỉ định</div><b>' + esc(o.DoctorName || '—') + '</b></div>' +
-            '<div class="col-sm-4"><div class="text-muted">Tái khám</div><b>' + (o.FollowUpDate ? U.vnDate(o.FollowUpDate) : '—') + '</b> ' + (o.FollowUpStatus && o.FollowUpStatus !== 'PENDING' ? U.badge(o.FollowUpStatus) : '') + '</div></div>' +
+            '<div class="col-sm-4"><div class="text-muted">Tái khám</div><b>' + (o.FollowUpDate ? U.vnDate(o.FollowUpDate) : '—') + '</b> ' + (o.FollowUpStatus && o.FollowUpStatus !== 'PENDING' ? U.badge(o.FollowUpStatus) : '') + '</div>' +
+            '<div class="col-12"><div class="text-muted">Người phụ trách</div><b id="d-assignees">' + (o.AssignedTo.length ? esc(o.AssignedTo.join(', ')) : '—') + '</b>' +
+              (o.CompletedAt ? ' <span class="small text-muted ms-2">Trả KQ: ' + U.vnDateTime(o.CompletedAt) + '</span>' : '') + '</div></div>' +
             (o.Note ? '<div class="small mt-2"><span class="text-muted">Ghi chú:</span> ' + esc(o.Note) + '</div>' : '') +
           '</div></div></div>' +
           '<div class="col-lg-5"><div class="card h-100"><div class="card-body"><table class="table table-sm mb-2"><tbody>' +
@@ -425,7 +462,10 @@
                 (money ? '<td class="text-end tabular">' + U.money(p.Amount) + '</td>' : '') + '</tr>';
             }).join('') + '</tbody></table>' +
             (money ? '<div class="d-flex justify-content-between small"><span class="text-muted">Tổng</span><span class="tabular">' + U.money(o.GrossAmount) + '</span></div>' +
-              '<div class="d-flex justify-content-between small"><span class="text-muted">Chiết khấu</span><span class="tabular">− ' + U.money(o.Discount) + '</span></div>' +
+              '<div class="d-flex justify-content-between align-items-center small" id="disc-row"><span class="text-muted">Chiết khấu</span>' +
+                (App.can('order.price') && !cancelled
+                  ? '<button class="btn btn-link btn-sm p-0 tabular text-decoration-none" id="disc-edit" title="Sửa chiết khấu">− ' + U.money(o.Discount) + ' <i class="bi bi-pencil small"></i></button>'
+                  : '<span class="tabular">− ' + U.money(o.Discount) + '</span>') + '</div>' +
               '<div class="d-flex justify-content-between fw-bold fs-5 text-primary"><span>Thành tiền</span><span class="tabular">' + U.money(o.NetAmount) + '</span></div>' : '') +
             '<div class="small text-muted mt-2">Tạo: ' + esc(o.CreatedBy) + ' · ' + U.vnDateTime(o.CreatedAt) + '<br>Cập nhật: ' + esc(o.UpdatedBy) + ' · ' + U.vnDateTime(o.UpdatedAt) + '</div>' +
           '</div></div></div></div>' +
@@ -437,6 +477,7 @@
 
       renderTab(resMap, canEnter);
       bind();
+      if (o.AssignedTo.length) App.Users.load().then(function () { var el = U.$('#d-assignees', view); if (el) el.textContent = App.Users.names(o.AssignedTo); }).catch(function () {});
     }
 
     function renderTab(resMap, canEnter) {
@@ -494,6 +535,32 @@
           });
         };
       });
+      // Sửa chiết khấu / thanh toán ngay tại ô Thành tiền
+      var de = U.$('#disc-edit', view);
+      if (de) de.onclick = function () {
+        var o = data.order;
+        U.$('#disc-row', view).innerHTML = '<span class="text-muted">Chiết khấu</span><div class="input-group input-group-sm" style="max-width:230px">' +
+          '<input class="form-control text-end tabular" id="disc-val" inputmode="numeric" value="' + (o.Discount || 0) + '">' +
+          '<button class="btn btn-primary" id="disc-ok" title="Lưu"><i class="bi bi-check-lg"></i></button><button class="btn btn-light" id="disc-x" title="Hủy"><i class="bi bi-x-lg"></i></button></div>';
+        var inp = U.$('#disc-val', view);
+        inp.focus(); inp.select();
+        var save = function () {
+          var v = Number(String(inp.value).replace(/\D/g, '')) || 0;
+          if (v > (o.GrossAmount || 0)) { U.toast('Chiết khấu lớn hơn tổng tiền', 'warn'); return; }
+          U.api('order.update', { orderId: o.OrderID, version: o.Version, discount: v }).then(function (d) { data = d; U.toast('Đã cập nhật chiết khấu'); render(); })
+            .catch(function (e) { if (e.code === 'CONFLICT') load(); });
+        };
+        U.$('#disc-ok', view).onclick = save;
+        U.$('#disc-x', view).onclick = render;
+        inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') save(); if (e.key === 'Escape') render(); });
+      };
+      var pb = U.$('#pay-toggle', view);
+      if (pb) pb.onclick = function () {
+        var o = data.order;
+        U.api('order.update', { orderId: o.OrderID, version: o.Version, paymentStatus: o.PaymentStatus === 'PAID' ? 'UNPAID' : 'PAID' })
+          .then(function (d) { data = d; U.toast(d.order.PaymentStatus === 'PAID' ? 'Đã ghi nhận thu tiền' : 'Đã chuyển về Chưa thu'); render(); })
+          .catch(function (e) { if (e.code === 'CONFLICT') load(); });
+      };
       var ed = U.$('#d-edit', view);
       if (ed) ed.onclick = editOrder;
       var cc = U.$('#d-cancel', view);
@@ -514,6 +581,7 @@
         '<div class="col-md-4"><label class="form-label">Ngày khám</label><input type="date" class="form-control" name="orderDate" value="' + o.OrderDate + '"></div>' +
         '<div class="col-md-8"><label class="form-label">BS chỉ định</label><input class="form-control" name="doctorName" list="dl-doctor2" value="' + esc(o.DoctorName || '') + '"><datalist id="dl-doctor2">' +
           App.state.catalog.doctors.map(function (d) { return '<option value="' + esc(d.DoctorName) + '">'; }).join('') + '</datalist></div>' +
+        '<div class="col-12"><label class="form-label">Người phụ trách</label><div id="e-assign"></div></div>' +
         '<div class="col-12"><label class="form-label">Nhóm xét nghiệm & đơn giá</label><div class="table-wrap"><table class="table table-sm"><tbody>' +
           App.activePanels().map(function (p) {
             var on = !!cur[p.PanelCode];
@@ -526,6 +594,7 @@
         '<div class="col-md-4"><label class="form-label">Tái khám (ngày)</label><input class="form-control" name="followUpDays" value="' + (o.FollowUpDays || '') + '"></div>' +
         '<div class="col-12"><label class="form-label">Ghi chú</label><textarea class="form-control" name="note" rows="2">' + esc(o.Note || '') + '</textarea></div>' +
         '</form></div><div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Đóng</button><button class="btn btn-primary" id="e-save">Lưu thay đổi</button></div>', { size: 'lg' });
+      var ePicker = App.assigneePicker(m.body.querySelector('#e-assign'), o.AssignedTo, { inline: true });
       m.body.querySelector('#e-save').onclick = function () {
         var f = U.formData(m.body.querySelector('#e-form'));
         var panels = U.$$('[data-ep]:checked', m.body).map(function (c) {
@@ -537,7 +606,7 @@
         });
         if (!panels.length) { U.toast('Phiếu cần ít nhất 1 nhóm', 'warn'); return; }
         var payload = { orderId: o.OrderID, version: o.Version, orderDate: f.orderDate, doctorName: f.doctorName, paymentStatus: f.paymentStatus,
-          followUpDays: Number(f.followUpDays) || 0, note: f.note, panels: panels };
+          followUpDays: Number(f.followUpDays) || 0, note: f.note, panels: panels, assignedTo: ePicker.get() };
         if (canPrice) payload.discount = Number(String(f.discount).replace(/\D/g, '')) || 0;
         U.api('order.update', payload).then(function (d) { data = d; m.hide(); U.toast('Đã cập nhật phiếu'); render(); })
           .catch(function (e) { if (e.code === 'CONFLICT') { m.hide(); load(); } });
@@ -681,10 +750,11 @@
         if (ed) ed.onclick = function () {
           var m = U.modal('<div class="modal-header"><h5 class="modal-title">Sửa hồ sơ ' + esc(p.PatientID) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body">' +
             patientFormHtml(p) + '<div class="small text-muted mt-2">Thay đổi không ảnh hưởng thông tin đã chốt trên các phiếu cũ.</div></div><div class="modal-footer"><button class="btn btn-primary" id="pe-save">Lưu</button></div>', { size: 'lg' });
+          bindPatientForm(m.body);
           m.body.querySelector('#pe-save').onclick = function () {
             var f = m.body.querySelector('#pt-form');
             if (!f.reportValidity()) return;
-            U.api('patient.save', U.formData(f)).then(function () { m.hide(); U.toast('Đã cập nhật'); load(); }).catch(function () {});
+            U.api('patient.save', U.formData(f)).then(function (r) { if (r.patient) App.Patients.upsert(r.patient); m.hide(); U.toast('Đã cập nhật'); load(); }).catch(function () {});
           };
         };
       }).catch(function (e) { view.innerHTML = U.empty(e.message, 'bi-exclamation-triangle'); });

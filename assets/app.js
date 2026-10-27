@@ -170,10 +170,131 @@
     setting: function (k, d) { var v = (App.state.settings || {})[k]; return v === undefined || v === '' ? d : v; }
   };
 
+  /* ================================================================ PATIENT INDEX (client-side search) */
+  /**
+   * Danh bạ BN rút gọn tải 1 lần / phiên (sessionStorage, xóa khi đăng xuất / đóng tab),
+   * đồng bộ tăng dần mỗi 60s → tìm theo tên / SĐT tức thì, không chờ server.
+   */
+  App.Patients = (function () {
+    var KEY = 'lis_pidx_v1', rows = null, stamp = '', syncedAt = 0, pending = null;
+    var key = function (s) {
+      return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toUpperCase().replace(/\s+/g, ' ').trim();
+    };
+    var digits = function (s) {
+      var d = String(s || '').replace(/\D/g, '');
+      if (d.indexOf('84') === 0 && d.length === 11) d = '0' + d.substring(2);
+      if (d.length === 9 && /^[235789]/.test(d)) d = '0' + d;
+      return d;
+    };
+    var toObj = function (r) {
+      return { PatientID: r[0], FullName: r[1], Gender: r[2], BirthYear: r[3] || null, Phone: digits(r[4]), Address: r[5], Ward: r[6], Province: r[7],
+               _active: r[8] !== 0, _k: key(r[1]), _a: key([r[5], r[6], r[7]].join(' ')) };
+    };
+    try { var o = JSON.parse(sessionStorage.getItem(KEY) || 'null'); if (o) { rows = o.rows.map(toObj); stamp = o.stamp; } } catch (e) { /* ignore */ }
+    function persist() {
+      try {
+        sessionStorage.setItem(KEY, JSON.stringify({ stamp: stamp, rows: rows.map(function (p) { return [p.PatientID, p.FullName, p.Gender, p.BirthYear, p.Phone, p.Address, p.Ward, p.Province, p._active ? 1 : 0]; }) }));
+      } catch (e) { /* quota */ }
+    }
+    function sync() {
+      if (pending) return pending;
+      pending = Api.call('patient.index', { since: rows ? stamp : '' }).then(function (d) {
+        if (d.full || !rows) rows = d.rows.map(toObj);
+        else {
+          var idx = {};
+          rows.forEach(function (p, i) { idx[p.PatientID] = i; });
+          d.rows.forEach(function (r) { var o = toObj(r); if (idx[o.PatientID] !== undefined) rows[idx[o.PatientID]] = o; else rows.push(o); });
+        }
+        stamp = d.stamp || stamp; syncedAt = Date.now(); persist();
+      }).finally(function () { pending = null; });
+      return pending;
+    }
+    return {
+      ready: function () { return !!rows; },
+      /** Có sẵn dữ liệu → trả ngay (đồng bộ nền nếu cũ > 60s); chưa có → chờ tải lần đầu. */
+      load: function () {
+        if (rows) { if (Date.now() - syncedAt > 60000) sync().catch(function () {}); return Promise.resolve(); }
+        return sync();
+      },
+      search: function (q, birthYear, ward, limit) {
+        var out = [];
+        if (!rows) return { total: 0, rows: [] };
+        var qd = digits(q), isPhone = /^[\d\s.+-]{3,}$/.test(q || '');
+        var tokens = isPhone ? [] : key(q).split(' ').filter(String);
+        var by = Number(birthYear) || 0, wk = key(ward);
+        rows.forEach(function (p) {
+          if (!p._active) return;
+          if (isPhone && p.Phone.indexOf(qd.replace(/^0/, '')) === -1) return;
+          for (var i = 0; i < tokens.length; i++) if (p._k.indexOf(tokens[i]) === -1) return;
+          if (by && Number(p.BirthYear) !== by) return;
+          if (wk && p._a.indexOf(wk) === -1) return;
+          out.push(p);
+        });
+        var kq = key(q);
+        out.sort(function (a, b) {
+          var sa = (isPhone ? (a.Phone === qd ? 0 : 1) : (a._k === kq ? 0 : (a._k.indexOf(kq) === 0 ? 1 : 2)));
+          var sb = (isPhone ? (b.Phone === qd ? 0 : 1) : (b._k === kq ? 0 : (b._k.indexOf(kq) === 0 ? 1 : 2)));
+          return sa - sb || a.FullName.localeCompare(b.FullName, 'vi');
+        });
+        return { total: out.length, rows: out.slice(0, limit || 30) };
+      },
+      upsert: function (p) {
+        if (!rows || !p) return;
+        var o = toObj([p.PatientID, p.FullName, p.Gender, p.BirthYear, p.Phone, p.Address, p.Ward, p.Province, 1]);
+        var i = rows.findIndex(function (x) { return x.PatientID === p.PatientID; });
+        if (i > -1) rows[i] = o; else rows.push(o);
+        persist();
+      },
+      clear: function () { rows = null; stamp = ''; syncedAt = 0; try { sessionStorage.removeItem(KEY); } catch (e) { /* ignore */ } }
+    };
+  })();
+
+  /* ================================================================ USERS (người phụ trách) */
+  App.Users = (function () {
+    var list = null, pending = null;
+    return {
+      load: function () {
+        if (list) return Promise.resolve(list);
+        if (!pending) pending = Api.call('user.options').then(function (l) { list = l; return l; }).finally(function () { pending = null; });
+        return pending;
+      },
+      name: function (u) { var x = (list || []).filter(function (y) { return y.Username === u; })[0]; return x ? x.FullName : u; },
+      names: function (arr) { return (arr || []).map(App.Users.name).join(', '); },
+      reset: function () { list = null; }
+    };
+  })();
+
+  /**
+   * Ô chọn nhiều người phụ trách (dropdown checkbox). Trả về { get(): [username] }.
+   */
+  App.assigneePicker = function (el, selected, opts) {
+    selected = (selected || []).slice();
+    var inline = opts && opts.inline;
+    el.innerHTML = inline
+      ? '<div class="test-pick d-flex flex-wrap column-gap-3"><button type="button" class="d-none"></button><div class="dropdown-menu-inline d-flex flex-wrap column-gap-3">Đang tải…</div></div>'
+      : '<div class="dropdown"><button type="button" class="form-select text-start text-truncate" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Đang tải…</button>' +
+        '<div class="dropdown-menu p-2 w-100 shadow" style="max-height:280px;overflow:auto"></div></div>';
+    var btn = el.querySelector('button'), menu = el.querySelector(inline ? '.dropdown-menu-inline' : '.dropdown-menu');
+    function label() { btn.textContent = selected.length ? App.Users.names(selected) : '— Chưa phân công —'; }
+    App.Users.load().then(function (users) {
+      menu.innerHTML = users.map(function (u, i) {
+        var id = 'asg-' + Math.random().toString(36).slice(2, 7) + i;
+        return '<div class="form-check py-1"><input class="form-check-input" type="checkbox" id="' + id + '" value="' + U.esc(u.Username) + '"' + (selected.indexOf(u.Username) > -1 ? ' checked' : '') + '>' +
+          '<label class="form-check-label w-100" for="' + id + '">' + U.esc(u.FullName) + ' <span class="small text-muted">' + U.esc(u.RoleName) + '</span></label></div>';
+      }).join('') || '<div class="small text-muted px-2">Chưa có nhân viên</div>';
+      label();
+    }).catch(function () { btn.textContent = 'Không tải được danh sách'; });
+    menu.addEventListener('change', function () {
+      selected = U.$$('input:checked', menu).map(function (x) { return x.value; });
+      label();
+    });
+    return { get: function () { return selected.slice(); } };
+  };
+
   /* ================================================================ ROUTER */
   var TITLES = {
     'order-new': 'Tạo phiếu yêu cầu xét nghiệm', 'order-search': 'Tra cứu phiếu xét nghiệm', 'order': 'Chi tiết phiếu xét nghiệm',
-    'patient': 'Hồ sơ bệnh nhân', 'followup': 'Cảnh báo tái khám', 'report': 'Thống kê doanh thu', 'audit': 'Nhật ký hệ thống', 'admin': 'Quản trị hệ thống'
+    'patient': 'Hồ sơ bệnh nhân', 'my-work': 'Việc của tôi', 'followup': 'Cảnh báo tái khám', 'report': 'Thống kê', 'audit': 'Nhật ký hệ thống', 'admin': 'Quản trị hệ thống'
   };
 
   function route() {
@@ -241,6 +362,20 @@
     if (boot.user.mustChangePassword) changePassword(true);
     route();
     refreshFollowupBadge();
+    if (App.can('order.create|order.view')) App.Patients.load().catch(function () {});   // tải trước danh bạ BN
+    capacityBanner();
+  }
+
+  /** Cảnh báo Admin khi Google Sheet dữ liệu sắp đầy. */
+  function capacityBanner() {
+    var old = document.getElementById('cap-banner');
+    if (old) old.remove();
+    if (!App.can('admin.config')) return;
+    var warn = (App.state.years || []).filter(function (y) { return y.Mode === 'RW' && y.UsedPercent >= (App.state.capacityWarnPercent || 70); });
+    if (!warn.length) return;
+    document.querySelector('.content').insertAdjacentHTML('beforebegin', '<div id="cap-banner" class="alert alert-warning rounded-0 mb-0 py-2 small">' +
+      '<i class="bi bi-database-exclamation"></i> ' + warn.map(function (y) { return U.esc(y.Note || ('DB_' + y.Year)) + ' đã dùng ' + y.UsedPercent + '% dung lượng'; }).join(' · ') +
+      '. Hệ thống tự tạo DB nối tiếp khi đạt 85%, hoặc vào <a href="#/admin/years">Kết nối dữ liệu năm</a> để tạo ngay.</div>');
   }
 
   function refreshFollowupBadge() {
@@ -293,7 +428,7 @@
       }).finally(function () { btn.disabled = false; btn.textContent = 'Đăng nhập'; });
     };
     document.getElementById('btn-logout').onclick = function () {
-      Api.call('auth.logout').catch(function () {}).finally(function () { Api.setToken(null); location.hash = ''; showLogin(); });
+      Api.call('auth.logout').catch(function () {}).finally(function () { Api.setToken(null); App.Patients.clear(); App.Users.reset(); location.hash = ''; showLogin(); });
     };
     document.getElementById('btn-change-pass').onclick = function () { changePassword(false); };
     document.getElementById('menu-toggle').onclick = function () { document.body.classList.toggle('sidebar-open'); };

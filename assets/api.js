@@ -7,7 +7,7 @@
   'use strict';
   var cfg = global.LIS_CONFIG || { API_URL: 'DEMO' };
   var TOKEN_KEY = 'lis_token';
-  var DEMO_KEY = 'lis_demo_state_v1';
+  var DEMO_KEY = 'lis_demo_state_v3';
   var token = null;
   try { token = sessionStorage.getItem(TOKEN_KEY); } catch (e) { /* storage unavailable */ }
 
