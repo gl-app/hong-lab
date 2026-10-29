@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '1.5.2',
+  VERSION: '1.5.4',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -246,6 +246,7 @@ var ROUTES = {
   'admin.settings.save':   { fn: function (p, c) { return AdminService.saveSettings(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.list':      { fn: function () { return AdminService.listYearDbs(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.save':      { fn: function (p, c) { return AdminService.saveYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.years.optimize':  { fn: function (p, c) { return AdminService.optimizeStorage(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.create':    { fn: function (p, c) { return AdminService.createYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.capacity':  { fn: function () { return AdminService.refreshCapacity(); }, perm: PERM.ADMIN_CONFIG },
   'admin.wards.save':      { fn: function (p, c) { return AdminService.saveWards(p, c); }, perm: PERM.ADMIN_CONFIG },
@@ -584,11 +585,14 @@ var Db = (function () {
   /** Create a table sheet with header + plain-text formatting (giữ số 0 đầu SĐT, ngày dạng text). */
   function ensureSheet_(ss, table) {
     var cols = SCHEMA[table];
-    var sh = ss.getSheetByName(table) || ss.insertSheet(table);
+    var isNew = !ss.getSheetByName(table);
+    var sh = isNew ? ss.insertSheet(table) : ss.getSheetByName(table);
     var current = sh.getLastColumn() > 0 ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
     var missing = cols.filter(function (c) { return current.indexOf(c) === -1; });
     if (missing.length) {
       var start = current.filter(String).length + 1;
+      var need = start + missing.length - 1;
+      if (sh.getMaxColumns() < need) sh.insertColumnsAfter(sh.getMaxColumns(), need - sh.getMaxColumns());   // sheet đã cắt gọn cột
       sh.getRange(1, start, 1, missing.length).setValues([missing]);
     }
     var width = Math.max(sh.getLastColumn(), cols.length);
@@ -603,8 +607,33 @@ var Db = (function () {
     header.forEach(function (h, i) {
       if (numeric.indexOf(h) > -1) sh.getRange(2, i + 1, sh.getMaxRows() - 1, 1).setNumberFormat('General');
     });
+    if (isNew) trimSheet_(sh, ROW_BUFFER);   // bảng mới: bỏ cột/dòng trống mặc định (26 cột × 1000 dòng)
     return sh;
   }
+
+  /**
+   * Cắt gọn 1 sheet: xóa cột trống bên phải tiêu đề + dòng trống dư dưới dữ liệu (giữ `rowBuffer` dòng trống).
+   * Google tính giới hạn 10 triệu ô theo cả ô trống → càng gọn càng chứa được nhiều phiếu / file.
+   * Ghi thêm dữ liệu vẫn an toàn: insert/replaceAll/ensureSheet_ tự mở rộng lưới khi cần.
+   */
+  var ROW_BUFFER = 200;
+  function trimSheet_(sh, rowBuffer) {
+    var before = sh.getMaxRows() * sh.getMaxColumns();
+    var lastCol = Math.max(1, sh.getLastColumn()), maxCol = sh.getMaxColumns();
+    if (maxCol > lastCol) sh.deleteColumns(lastCol + 1, maxCol - lastCol);
+    var keep = Math.max(2, sh.getLastRow() + (rowBuffer === undefined ? ROW_BUFFER : rowBuffer));
+    var maxRow = sh.getMaxRows();
+    if (maxRow > keep) sh.deleteRows(keep + 1, maxRow - keep);
+    return before - sh.getMaxRows() * sh.getMaxColumns();
+  }
+
+  /** Cắt gọn mọi bảng của hệ thống trong 1 file (bỏ qua tab do người dùng tự thêm). */
+  function optimize(id) {
+    var ss = openById_(id), freed = 0, before = usedCells(id);
+    ss.getSheets().forEach(function (sh) { if (SCHEMA[sh.getName()]) freed += trimSheet_(sh, ROW_BUFFER); });
+    return { id: id, name: ss.getName(), before: before, after: before - freed, freed: freed };
+  }
+  function coreIds() { return [propId_(PROP.CONFIG_DB_ID), propId_(PROP.PATIENT_DB_ID)]; }
 
   /** Header → column index map (0-based). */
   function header_(sh) {
@@ -738,7 +767,7 @@ var Db = (function () {
     var hdr = header_(sh);
     var rows = objs.map(function (o) { return objToRow_(o, hdr); });
     var start = sh.getLastRow() + 1;
-    if (start + rows.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), rows.length + 500);
+    if (start + rows.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), start + rows.length - 1 - sh.getMaxRows() + ROW_BUFFER);
     sh.getRange(start, 1, rows.length, hdr.width).setValues(rows);
     invalidate_(table, year);
   }
@@ -778,6 +807,7 @@ var Db = (function () {
     var hdr = header_(sh);
     var last = sh.getLastRow();
     if (last > 1) sh.getRange(2, 1, last - 1, hdr.width).clearContent();
+    if (objs.length + 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), objs.length + 1 - sh.getMaxRows() + ROW_BUFFER);
     if (objs.length) sh.getRange(2, 1, objs.length, hdr.width).setValues(objs.map(function (o) { return objToRow_(o, hdr); }));
     invalidate_(table, year);
   }
@@ -802,6 +832,9 @@ var Db = (function () {
     deleteRows: deleteRows,
     replaceAll: replaceAll,
     usedCells: usedCells,
+    trimSheet: trimSheet_,
+    optimize: optimize,
+    coreIds: coreIds,
     invalidate: invalidate_
   };
 })();
@@ -2286,6 +2319,7 @@ var ReportService = {
 
 var PrintService = {
   PAGE: { A4: [595.28, 841.89], A5: [419.53, 595.28] },
+  font: 'Be Vietnam Pro',   // đặt lại theo Settings.PRINT_FONT mỗi lần render
   COLOR: { primary: '#0F4C5C', text: '#1F2933', muted: '#5F6B7A', high: '#B42318', border: '#9AA5B1' },
 
   /** p: { orderId, panelCodes?: [], format: 'pdf'|'docx' } → { fileName, mimeType, base64 } */
@@ -2301,6 +2335,7 @@ var PrintService = {
     if (!panels.length) throw new AppError('VALIDATION', 'Không có nhóm XN để in.');
 
     var settings = Settings.all();
+    PrintService.font = PrintService.fontOf_(settings);
     var pm = Catalog.panelMap();
     var fileName = data.order.OrderID + '_' + searchKey_(data.order.PatientName).replace(/\s+/g, '_') + '_' + codes.join('-');
 
@@ -2552,6 +2587,13 @@ var PrintService = {
   },
 
   /* ---------------------------------------------------------------- HELPERS */
+  /** Font phiếu in (Settings.PRINT_FONT) – chỉ nhận font có sẵn trong Google Docs; mặc định Be Vietnam Pro (thiết kế cho tiếng Việt). */
+  FONTS: ['Be Vietnam Pro', 'Arial', 'Roboto', 'Noto Sans', 'Times New Roman'],
+  fontOf_: function (settings) {
+    var f = String(settings.PRINT_FONT || '').trim().toLowerCase();
+    return PrintService.FONTS.filter(function (x) { return x.toLowerCase() === f; })[0] || 'Be Vietnam Pro';
+  },
+
   para_: function (p, text, size, bold, color) {
     p.setText(String(text || ''));
     return PrintService.styleText_(p, size, bold, color);
@@ -2561,7 +2603,7 @@ var PrintService = {
     p.setSpacingBefore(0).setSpacingAfter(0).setLineSpacing(1.05);
     var t = p.editAsText();
     if (t.getText().length) {
-      t.setFontFamily('Arial').setFontSize(size).setBold(!!bold).setForegroundColor(color || '#000000');
+      t.setFontFamily(PrintService.font).setFontSize(size).setBold(!!bold).setForegroundColor(color || '#000000');
     }
     return p;
   },
@@ -2859,6 +2901,22 @@ var AdminService = {
     return withLock_(function () {
       var row = YearDb.create(year, ctx.username);
       return { created: row, list: AdminService.listYearDbs() };
+    });
+  },
+
+  /** Cắt gọn cột/dòng trống của mọi bảng: Config, Customers và tất cả DB năm → đo lại dung lượng. */
+  optimizeStorage: function (p, ctx) {
+    return withLock_(function () {
+      var ids = Db.coreIds().concat(YearDb.allIds()), seen = {}, results = [];
+      ids.forEach(function (id) {
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        try { results.push(Db.optimize(id)); } catch (e) { results.push({ id: id, error: e.message }); }
+      });
+      YearDb.refreshCapacity();
+      var freed = results.reduce(function (s, r) { return s + (r.freed || 0); }, 0);
+      SysLog.write(ctx.username, 'STORAGE_OPTIMIZE', 'YearDatabase', '', { files: results.length, freed: freed });
+      return { results: results, freed: freed, list: AdminService.listYearDbs() };
     });
   },
 
@@ -3256,6 +3314,7 @@ function setup() {
     { Key: 'FOLLOWUP_PRESETS', Value: '7,14,30,90,180', Description: 'Gợi ý số ngày tái khám' },
     { Key: 'SESSION_HOURS', Value: '6', Description: 'Thời hạn phiên đăng nhập (giờ, tối đa 6)' }
   ]);
+  addSettingIfMissing_('PRINT_FONT', 'Be Vietnam Pro', 'Font chữ phiếu kết quả: Be Vietnam Pro | Arial | Roboto | Noto Sans | Times New Roman');
   addSettingIfMissing_('LOGIN_BG_URL', '', 'Ảnh nền màn hình đăng nhập (URL ảnh công khai). Trống = ảnh mặc định');
   addSettingIfMissing_('LOGIN_BG_DIM', '0.35', 'Độ tối lớp phủ ảnh nền đăng nhập: 0 (không phủ) – 0.8');
   addSettingIfMissing_('AUTO_CREATE_YEAR_DB', 'TRUE', 'TRUE = tự tạo Google Sheet DB_<năm> khi sang năm mới / DB đầy');
@@ -3348,6 +3407,8 @@ function warmup() {
 
 function maintenance() {
   withLock_(function () {
+    // Cắt gọn cột/dòng trống trước khi đo (giữ dung lượng thực, tránh tạo DB nối tiếp sớm)
+    Db.coreIds().concat(YearDb.allIds()).forEach(function (id) { try { Db.optimize(id); } catch (e) { console.warn('optimize ' + id + ': ' + e.message); } });
     var list = YearDb.refreshCapacity();
     var auto = String(Settings.get('AUTO_CREATE_YEAR_DB', 'TRUE')).toUpperCase() !== 'FALSE';
     if (!auto) return;

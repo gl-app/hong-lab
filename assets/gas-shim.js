@@ -111,6 +111,10 @@
     return out;
   };
   Range.prototype.setValues = function (vals) {
+    // Giống Google: ghi ra ngoài lưới (sau khi cắt gọn cột/dòng) là lỗi
+    if (this.row + vals.length - 1 > this.sheet.getMaxRows() || this.col + ((vals[0] || []).length) - 1 > this.sheet.getMaxColumns()) {
+      throw new Error('The coordinates of the range are outside the dimensions of the sheet.');
+    }
     for (var r = 0; r < vals.length; r++) {
       var idx = this.row - 1 + r;
       while (this.sheet.data.length <= idx) this.sheet.data.push([]);
@@ -165,11 +169,24 @@
     });
     return m;
   };
-  Sheet.prototype.getMaxRows = function () { return Math.max(1000, this.data.length + 1); };
-  Sheet.prototype.getMaxColumns = function () { return Math.max(26, this.getLastColumn()); };
+  Sheet.prototype.getMaxRows = function () { return Math.max(this.mr || 1000, this.data.length); };
+  Sheet.prototype.getMaxColumns = function () { var w = 0; this.data.forEach(function (r) { w = Math.max(w, r.length); }); return Math.max(this.mc || 26, w); };
+  Sheet.prototype.insertColumnsAfter = function (after, n) { this.mc = this.getMaxColumns() + n; return this; };
+  Sheet.prototype.deleteColumns = function (start, n) {
+    if (start + n - 1 > this.getMaxColumns()) throw new Error('Those columns are out of bounds.');
+    var mc = this.getMaxColumns() - n;
+    this.data.forEach(function (r) { r.splice(start - 1, n); });
+    this.mc = mc; STORE.dirty = true;
+  };
+  Sheet.prototype.deleteRows = function (start, n) {
+    if (start + n - 1 > this.getMaxRows()) throw new Error('Those rows are out of bounds.');
+    var mr = this.getMaxRows() - n;
+    this.data.splice(start - 1, n);
+    this.mr = mr; STORE.dirty = true;
+  };
   Sheet.prototype.getRange = function (r, c, nr, nc) { return new Range(this, r, c, nr, nc); };
   Sheet.prototype.deleteRow = function (r) { this.data.splice(r - 1, 1); STORE.dirty = true; };
-  Sheet.prototype.insertRowsAfter = function () { return this; };
+  Sheet.prototype.insertRowsAfter = function (after, n) { this.mr = this.getMaxRows() + n; return this; };
   Sheet.prototype.setFrozenRows = function () { return this; };
 
   function Spreadsheet(id) { this.id = id; this.sheets = {}; this.order = []; }
@@ -244,7 +261,7 @@
       Object.keys(STORE.spreadsheets).forEach(function (id) {
         var s = STORE.spreadsheets[id];
         o.ss[id] = { order: s.order, sheets: {} };
-        s.order.forEach(function (n) { o.ss[id].sheets[n] = s.sheets[n].data; });
+        s.order.forEach(function (n) { o.ss[id].sheets[n] = s.sheets[n].data; (o.ss[id].grid = o.ss[id].grid || {})[n] = [s.sheets[n].mr || 0, s.sheets[n].mc || 0]; });
       });
       return o;
     },
@@ -252,7 +269,7 @@
       Object.keys(o.props || {}).forEach(function (k) { props[k] = o.props[k]; });
       Object.keys(o.ss || {}).forEach(function (id) {
         var s = SpreadsheetApp.openById(id);
-        (o.ss[id].order || []).forEach(function (n) { var sh = s.getSheetByName(n) || s.insertSheet(n); sh.data = o.ss[id].sheets[n] || []; });
+        (o.ss[id].order || []).forEach(function (n) { var sh = s.getSheetByName(n) || s.insertSheet(n); sh.data = o.ss[id].sheets[n] || []; var g = (o.ss[id].grid || {})[n]; if (g) { sh.mr = g[0] || null; sh.mc = g[1] || null; } });
       });
     },
     clearCache: function () { Object.keys(scriptCache._raw).forEach(function (k) { delete scriptCache._raw[k]; }); }

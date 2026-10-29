@@ -687,6 +687,12 @@
     var size = String(s.PRINT_PAGE_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5';   // khổ mặc định; từng nhóm có thể đặt riêng (Panels.PageSize)
     var SZ = { A4: { w: '192mm', h: 297, base: 11, sig: '4.6em' }, A5: { w: '130mm', h: 210, base: 9.5, sig: '4.2em' } };
     var firstSize = null;
+    // Font phiếu in (Settings.PRINT_FONT, mặc định Be Vietnam Pro – thiết kế cho tiếng Việt). Google Font → tải trong iframe in.
+    var FONT = {
+      'be vietnam pro': { css: '"Be Vietnam Pro"', g: 'Be+Vietnam+Pro' }, 'roboto': { css: 'Roboto', g: 'Roboto' },
+      'noto sans': { css: '"Noto Sans"', g: 'Noto+Sans' }, 'arial': { css: 'Arial' }, 'times new roman': { css: '"Times New Roman", Times, serif' }
+    }[String(s.PRINT_FONT || 'Be Vietnam Pro').trim().toLowerCase()] || { css: '"Be Vietnam Pro"', g: 'Be+Vietnam+Pro' };
+    var fontLink = FONT.g ? '<link id="pf" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=' + FONT.g + ':wght@400;500;600;700&display=block">' : '';
     var od = o.OrderDate.split('-');
     var now = new Date();
     var logo = s.CLINIC_LOGO_DATA || s.CLINIC_LOGO_URL || '';
@@ -732,7 +738,7 @@
     }).join('');
     var pm = 'margin:8mm 9mm 8mm 9mm}';
     var css = '@page{size:' + (firstSize || size) + ' portrait;' + pm + '@page a4{size:A4 portrait;' + pm + '@page a5{size:A5 portrait;' + pm + '*{box-sizing:border-box}' +
-      'body{font-family:Arial,"Helvetica Neue",Helvetica,"Segoe UI",sans-serif;color:#1f2933;margin:0;line-height:1.35}' +
+      'body{font-family:' + FONT.css + ',Arial,"Helvetica Neue",Helvetica,"Segoe UI",sans-serif;color:#1f2933;margin:0;line-height:1.35}' +
       '.page{position:relative;z-index:1;page-break-after:always;page-break-inside:avoid}' +
       '.sz-a4{page:a4;width:' + SZ.A4.w + ';font-size:' + SZ.A4.base + 'pt}.sz-a5{page:a5;width:' + SZ.A5.w + ';font-size:' + SZ.A5.base + 'pt}' +
       '.sz-a4 .sig{height:' + SZ.A4.sig + '}.sz-a5 .sig{height:' + SZ.A5.sig + '}.page:last-child{page-break-after:auto}' +
@@ -742,7 +748,7 @@
       '.ttl{text-align:center;margin:.75em 0 .6em}h1{color:#0f4c5c;font-size:1.32em;margin:0;letter-spacing:.03em}h2{color:#0f4c5c;font-size:1.08em;margin:1px 0 0;font-weight:700}' +
       'table{width:100%;border-collapse:collapse}' +
       '.info{background:rgba(15,76,92,.05);border:1px solid #d5e2e5;border-radius:4px;margin-bottom:.6em}.info td{padding:.25em .65em;vertical-align:top}.w60{width:60%}' +
-      '.pn{font-size:1.08em;letter-spacing:.02em}.sp{display:inline-block;width:14px}.mono{font-family:Consolas,"Courier New",monospace}' +
+      '.pn{font-size:1.08em;letter-spacing:.02em}.sp{display:inline-block;width:14px}.mono{font-variant-numeric:tabular-nums;letter-spacing:.03em}' +
       '.res th{background:#0f4c5c;color:#fff;font-size:.8em;font-weight:700;padding:.5em .4em;border:.5pt solid #0f4c5c;letter-spacing:.03em}' +
       '.res td{border:.5pt solid #c3ced4;padding:.32em .45em}.res tbody tr:nth-child(even) td{background:rgba(15,76,92,.045)}' +
       '.c{text-align:center}.mu{color:#5f6b7a}.tn{font-weight:600}.rv{font-weight:700;font-size:1.04em}.rf{font-size:.9em}.ab{color:#b42318}' +
@@ -757,7 +763,7 @@
     frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1300px;border:0;';
     var doc = frame.contentWindow.document;
     doc.open();
-    doc.write('<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>' + esc(o.PatientID + ' ' + o.PatientName) + '</title><style>' + css + '</style></head><body>' +
+    doc.write('<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>' + esc(o.PatientID + ' ' + o.PatientName) + '</title>' + fontLink + '<style>' + css + '</style></head><body>' +
       (wmOn ? '<img class="wm" src="' + esc(logo) + '" alt="">' : '') + pages + '</body></html>');
     doc.close();
     // Tự co chữ cho mỗi phiếu vừa đúng 1 trang (giữ chữ ký + tên Trưởng phòng ở trang 1)
@@ -770,7 +776,26 @@
         while (pg.scrollHeight > maxH && k > 0.7) { k = Math.round((k - 0.03) * 100) / 100; pg.style.fontSize = (basePt * k).toFixed(2) + 'pt'; }
       });
     };
-    setTimeout(function () { try { fitPages(); } catch (e) { /* đo lỗi → in bình thường */ } frame.contentWindow.focus(); frame.contentWindow.print(); }, 350);
+    var printed = false;
+    var go = function () {
+      if (printed) return;
+      printed = true;
+      try { fitPages(); } catch (e) { /* đo lỗi → in bình thường */ }
+      frame.contentWindow.focus(); frame.contentWindow.print();
+    };
+    // Chờ font tải xong (tối đa 3,5 giây) rồi mới đo & in – tránh in bằng font dự phòng
+    var t0 = Date.now();
+    var waitFont = function () {
+      var link = doc.getElementById('pf');
+      if (!link || !doc.fonts || !doc.fonts.load) return go();
+      if (!link.sheet && Date.now() - t0 < 3000) return setTimeout(waitFont, 80);
+      var fam = FONT.css;
+      Promise.race([
+        Promise.all(['400', '600', '700'].map(function (w) { return doc.fonts.load(w + ' 12px ' + fam, 'Ệệ'); })).then(function () { return doc.fonts.ready; }),
+        new Promise(function (r) { setTimeout(r, 3500 - (Date.now() - t0)); })
+      ]).then(go, go);
+    };
+    setTimeout(waitFont, 120);
   };
 
   /* ================================================================ HISTORY COMPONENT */

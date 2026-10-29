@@ -721,6 +721,7 @@
       var thisYear = new Date().getFullYear();
       body.innerHTML = '<div class="row g-3"><div class="col-xl-8"><div class="card"><div class="card-header justify-content-between flex-wrap gap-2"><span>Google Sheet dữ liệu theo năm</span><div class="d-flex gap-2">' +
         '<button class="btn btn-sm btn-light" id="y-cap"><i class="bi bi-speedometer2"></i> Đo dung lượng</button>' +
+        '<button class="btn btn-sm btn-light" id="y-opt" title="Xóa cột/dòng trống thừa ở mọi bảng: Config, Customers, các DB năm"><i class="bi bi-scissors"></i> Tối ưu dung lượng</button>' +
         '<button class="btn btn-sm btn-primary" id="y-create"><i class="bi bi-plus-lg"></i> Tạo DB mới</button></div></div>' +
         '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
         list.map(function (y) {
@@ -732,7 +733,8 @@
           '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê tự gộp mọi DB của các năm liên quan.</li>' +
           '<li><b>Sang năm mới:</b> phiếu đầu tiên của năm tự tạo <span class="kbd">DB_' + (thisYear + 1) + '</span> (cùng thư mục Drive với DB cũ). Từ 15/12 hệ thống tạo sẵn DB năm sau. DB năm cũ giữ nguyên.</li>' +
           '<li><b>DB đầy:</b> cảnh báo ở 70%; đạt 85% tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>), DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
-          '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li></ul></div></div>' +
+          '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li>' +
+          '<li><b>Tối ưu dung lượng:</b> xóa cột trống bên phải và dòng trống dư (giữ 200 dòng) ở mọi bảng. Hệ thống tự chạy lúc 01:00 hằng đêm; bấm nút để chạy ngay.</li></ul></div></div>' +
         '<div class="col-xl-4"><div class="card"><div class="card-header" id="y-title">Kết nối Sheet có sẵn</div><div class="card-body"><form id="y-form" class="row g-2">' +
         '<div class="col-4"><label class="form-label">Năm</label><input class="form-control" name="Year" required inputmode="numeric" value="' + thisYear + '"></div>' +
         '<div class="col-8"><label class="form-label">Trạng thái</label><select class="form-select" name="Mode"><option value="RW">Đang ghi</option><option value="FULL">Đầy – chỉ sửa</option><option value="RO">Khóa sổ (chỉ đọc)</option></select></div>' +
@@ -757,6 +759,18 @@
         U.api('admin.years.save', U.formData(form)).then(function (l) { U.toast('Đã lưu kết nối'); render(l); }).catch(function () {});
       };
       U.$('#y-cap', body).onclick = function () { U.api('admin.years.capacity').then(function (l) { U.toast('Đã cập nhật dung lượng'); render(l); }).catch(function () {}); };
+      U.$('#y-opt', body).onclick = function () {
+        var btn = this;
+        U.confirm('Tối ưu dung lượng', 'Xóa các cột trống bên phải và dòng trống dư bên dưới mỗi bảng (giữ lại 200 dòng trống để ghi tiếp). Dữ liệu không bị ảnh hưởng. Tab do bạn tự thêm vào file sẽ được giữ nguyên.', 'Tối ưu').then(function (ok) {
+          if (!ok) return;
+          btn.disabled = true;
+          U.api('admin.years.optimize').then(function (r) {
+            var errs = r.results.filter(function (x) { return x.error; });
+            U.toast('Đã giải phóng ' + U.num(r.freed) + ' ô trên ' + r.results.length + ' file' + (errs.length ? ' · ' + errs.length + ' file lỗi' : ''), errs.length ? 'warn' : undefined);
+            render(r.list);
+          }).catch(function () {}).finally(function () { btn.disabled = false; });
+        });
+      };
       U.$('#y-create', body).onclick = function () {
         U.prompt('Tạo Google Sheet DB mới', 'Năm dữ liệu (vd ' + (thisYear + 1) + '). Nếu năm đã có DB, file mới là DB nối tiếp và DB cũ chuyển "Đầy – chỉ sửa".', true).then(function (v) {
           if (!v) return;

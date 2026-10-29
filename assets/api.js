@@ -24,9 +24,9 @@
 
   function initDemo() {
     if (demoReady) return demoReady;
-    demoReady = loadScript('assets/gas-shim.js?v=1.5.2')
-      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=1.5.2'); })
-      .then(function () { return loadScript('assets/demo/demo-seed.js?v=1.5.2'); })
+    demoReady = loadScript('assets/gas-shim.js?v=1.5.4')
+      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=1.5.4'); })
+      .then(function () { return loadScript('assets/demo/demo-seed.js?v=1.5.4'); })
       .then(function () {
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch (e) { saved = null; }
