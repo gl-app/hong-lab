@@ -69,7 +69,9 @@
       '<button class="btn btn-primary" id="w-go"><i class="bi bi-arrow-clockwise"></i> Tải</button>' +
       (canExport ? '<div class="ms-auto d-flex gap-2 align-items-center"><div class="form-check mb-0"><input class="form-check-input" type="checkbox" id="w-incres"><label class="form-check-label small" for="w-incres">Kèm kết quả chi tiết</label></div>' +
         '<button class="btn btn-outline-primary" id="w-export"><i class="bi bi-file-earmark-excel"></i> Xuất Excel</button></div>' : '') +
-      '</div></div><div class="card" id="w-list"></div>';
+      '</div></div><div id="w-sum" class="mb-3"></div><div class="card" id="w-list"></div>';
+    var wChart = null;
+    App._cleanup = function () { if (wChart) wChart.destroy(); };
     if (isAdmin) App.Users.load().then(function (users) {
       var sel = U.$('#w-user', view);
       if (!sel) return;
@@ -86,10 +88,48 @@
       if (isAdmin) p.username = st.username;
       return p;
     }
+    /** Thống kê nhanh công việc – không có số tiền. */
+    function loadSummary(p) {
+      var box = U.$('#w-sum', view);
+      var q = { from: p.from, to: p.to };
+      if (isAdmin) q.username = p.username;
+      U.api('work.summary', q, { silent: true }).then(function (d) {
+        var s = d.summary;
+        var k = [
+          ['Tổng phiếu', U.num(s.total), U.vnDate(d.from) + ' → ' + U.vnDate(d.to), 'var(--brand)'],
+          ['Hoàn tất', U.num(s.completed), 'Tỷ lệ ' + s.completionRate + '%', 'var(--success)'],
+          ['Đang chờ KQ', U.num(s.pending), s.pendingOver24h ? s.pendingOver24h + ' phiếu chờ > 24 giờ' : 'Không có phiếu chờ > 24 giờ', s.pendingOver24h ? 'var(--danger)' : 'var(--warn)'],
+          ['Hôm nay', s.todayCompleted + ' / ' + s.today, 'hoàn tất / tổng', 'var(--brand)'],
+          ['Thời gian trả KQ', s.avgTatHours === null ? '—' : s.avgTatHours + ' giờ', s.medianTatHours === null ? 'trung bình' : 'trung vị ' + s.medianTatHours + ' giờ', 'var(--brand)']
+        ];
+        box.innerHTML = '<div class="row g-3">' + k.map(function (x) {
+          return '<div class="col-6 col-lg"><div class="card kpi h-100"><div class="label">' + x[0] + '</div><div class="value" style="color:' + x[3] + '">' + x[1] + '</div><div class="sub">' + esc(x[2]) + '</div></div></div>';
+        }).join('') + '</div>' +
+          (s.total ? '<div class="row g-3 mt-0"><div class="col-xl-8"><div class="card h-100"><div class="card-header">Phiếu theo ngày</div><div class="card-body"><canvas id="w-chart" height="90"></canvas></div></div></div>' +
+          '<div class="col-xl-4"><div class="card h-100"><div class="card-header">Theo nhóm xét nghiệm</div><div class="card-body">' +
+            d.byPanel.map(function (x) {
+              var pct = Math.round(x.count * 100 / s.total);
+              return '<div class="d-flex align-items-center gap-2 mb-2"><span class="panel-chip" style="width:34px;text-align:center">' + x.panelCode + '</span><span class="small flex-grow-1 text-truncate">' + esc(x.panelName) + '</span>' +
+                '<div class="progress" style="width:90px;height:6px"><div class="progress-bar" style="width:' + pct + '%;background:var(--brand)"></div></div><span class="small tabular" style="width:28px;text-align:right">' + x.count + '</span></div>';
+            }).join('') + '</div></div></div></div>' : '');
+        if (wChart) { wChart.destroy(); wChart = null; }
+        if (window.Chart && s.total && U.$('#w-chart', box)) {
+          wChart = new Chart(U.$('#w-chart', box), {
+            type: 'bar',
+            data: { labels: d.byDay.map(function (x) { return U.vnDate(x.date).substring(0, 5); }),
+              datasets: [{ label: 'Hoàn tất', data: d.byDay.map(function (x) { return x.completed; }), backgroundColor: '#0f4c5c', borderRadius: 3 },
+                         { label: 'Chờ KQ', data: d.byDay.map(function (x) { return x.total - x.completed; }), backgroundColor: '#e36414', borderRadius: 3 }] },
+            options: { plugins: { legend: { position: 'bottom' } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { precision: 0 } } } }
+          });
+        }
+      }).catch(function () { box.innerHTML = ''; });
+    }
     function load() {
       var box = U.$('#w-list', view);
       box.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
-      Promise.all([U.api('work.list', params()), App.Users.load().catch(function () { return []; })]).then(function (res) {
+      var prm = params();
+      loadSummary(prm);
+      Promise.all([U.api('work.list', prm), App.Users.load().catch(function () { return []; })]).then(function (res) {
         var d = res[0];
         U.$('[data-wc="PENDING"]', view).textContent = d.counts.PENDING;
         U.$('[data-wc="DONE"]', view).textContent = d.counts.DONE;
@@ -332,20 +372,105 @@
     ({ general: general, users: users, roles: roles, catalog: catalog, doctors: doctors, wards: wards, years: years, system: system })[tab](body);
   };
 
+  var HIDDEN_SETTINGS = ['CLINIC_LOGO_DATA', 'CLINIC_LOGO_FILE_ID', 'CLINIC_WATERMARK_FILE_ID', 'WATERMARK_ENABLED', 'WATERMARK_OPACITY'];
+
+  /** Đọc file ảnh → Image. */
+  function loadImage(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { var img = new Image(); img.onload = function () { resolve(img); }; img.onerror = reject; img.src = fr.result; };
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+  /** Vẽ lại ảnh với chiều rộng tối đa + độ trong suốt → PNG dataURL (giữ nền trong suốt). */
+  function renderPng(img, maxW, alpha) {
+    var scale = Math.min(1, maxW / img.naturalWidth);
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale)); c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    var g = c.getContext('2d');
+    g.globalAlpha = alpha === undefined ? 1 : alpha;
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  }
+
   function general(body) {
     U.api('admin.settings.get').then(function (rows) {
-      body.innerHTML = '<div class="card"><div class="card-body"><form id="g-form" class="row g-3">' + rows.map(function (r) {
-        var long = /FOOTER|ADDRESS/.test(r.Key);
-        return '<div class="col-md-6"><label class="form-label mono">' + esc(r.Key) + '</label>' +
-          (long ? '<textarea class="form-control" rows="2" name="' + esc(r.Key) + '">' + esc(r.Value) + '</textarea>' : '<input class="form-control" name="' + esc(r.Key) + '" value="' + esc(r.Value) + '">') +
-          '<div class="form-text">' + esc(r.Description || '') + '</div></div>';
-      }).join('') + '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="g-save"><i class="bi bi-save"></i> Lưu cấu hình</button></div></div>';
+      var st = App.state.settings || {};
+      var map = {}; rows.forEach(function (r) { map[r.Key] = r.Value; });
+      var op = Number(map.WATERMARK_OPACITY || 0.08);
+      var cur = map.CLINIC_LOGO_DATA || map.CLINIC_LOGO_URL || '';
+      body.innerHTML =
+        '<div class="card mb-3"><div class="card-header"><i class="bi bi-image"></i> Logo & watermark phiếu kết quả</div><div class="card-body"><div class="row g-4 align-items-start">' +
+          '<div class="col-lg-4"><label class="form-label">Logo hiện tại</label><div class="border rounded p-3 text-center bg-white" style="min-height:120px" id="lg-cur">' +
+            (cur ? '<img src="' + esc(cur) + '" style="max-height:100px;max-width:100%">' : '<div class="text-muted small py-4">Chưa có logo</div>') + '</div>' +
+            '<label class="form-label mt-3">Chọn file logo mới</label><input type="file" class="form-control" id="lg-file" accept="image/png,image/jpeg,image/webp">' +
+            '<div class="form-text">PNG <b>nền trong suốt</b>, rộng ≥ 500px cho bản in sắc nét.</div></div>' +
+          '<div class="col-lg-4"><label class="form-label">Watermark</label>' +
+            '<div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" id="lg-wm"' + (String(map.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? ' checked' : '') + '><label class="form-check-label" for="lg-wm">In logo mờ giữa phiếu kết quả</label></div>' +
+            '<label class="form-label">Độ đậm: <b id="lg-opv">' + Math.round(op * 100) + '%</b></label><input type="range" class="form-range" id="lg-op" min="3" max="30" value="' + Math.round(op * 100) + '">' +
+            '<div class="form-text">Khuyên dùng 6–12% để chữ và số liệu vẫn rõ khi in.</div></div>' +
+          '<div class="col-lg-4"><label class="form-label">Xem trước phiếu</label><div class="border rounded bg-white position-relative overflow-hidden" style="height:200px;padding:12px 14px">' +
+            '<img id="lg-pv-wm" src="' + esc(cur) + '" style="position:absolute;left:50%;top:55%;width:62%;transform:translate(-50%,-50%);opacity:' + op + ';' + (cur ? '' : 'display:none') + '">' +
+            '<div style="position:relative;font-size:10px;line-height:1.7;color:#334">' +
+              '<div class="d-flex gap-2 align-items-center border-bottom pb-1 mb-1"><img id="lg-pv-logo" src="' + esc(cur) + '" style="height:22px;' + (cur ? '' : 'display:none') + '"><b style="color:#0f4c5c">' + esc(st.CLINIC_NAME || 'PHÒNG XN') + '</b></div>' +
+              '<div class="text-center fw-bold" style="color:#0f4c5c">PHIẾU XÉT NGHIỆM SINH HÓA MÁU</div>' +
+              'Họ và tên: NGUYỄN VĂN A &nbsp; Tuổi: 45<br>Glucose ........ 5.6 mmol/l<br>Cholesterol ..... 4.9 mmol/l<br>Triglycerid ...... 1.8 mmol/l<br>ALT (GPT) ....... 32 U/L</div></div></div>' +
+        '</div></div><div class="card-footer bg-white d-flex gap-2 justify-content-end">' +
+          (cur ? '<button class="btn btn-outline-danger" id="lg-del"><i class="bi bi-trash"></i> Xóa logo</button>' : '') +
+          '<button class="btn btn-primary" id="lg-save"><i class="bi bi-cloud-upload"></i> Lưu logo & watermark</button></div></div>' +
+        '<div class="card"><div class="card-header">Thông tin chung</div><div class="card-body"><form id="g-form" class="row g-3">' + rows.filter(function (r) { return HIDDEN_SETTINGS.indexOf(r.Key) === -1; }).map(function (r) {
+          var long = /FOOTER|ADDRESS/.test(r.Key);
+          return '<div class="col-md-6"><label class="form-label mono">' + esc(r.Key) + '</label>' +
+            (long ? '<textarea class="form-control" rows="2" name="' + esc(r.Key) + '">' + esc(r.Value) + '</textarea>' : '<input class="form-control" name="' + esc(r.Key) + '" value="' + esc(r.Value) + '">') +
+            '<div class="form-text">' + esc(r.Description || '') + '</div></div>';
+        }).join('') + '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="g-save"><i class="bi bi-save"></i> Lưu cấu hình</button></div></div>';
+
+      var img = null;
+      var refreshBoot = function () { return Api.call('auth.me').then(function (boot) { App.state.settings = boot.settings; App.applyBranding(boot.settings); }); };
+      U.$('#lg-file', body).onchange = function (e) {
+        var f = e.target.files[0];
+        if (!f) return;
+        loadImage(f).then(function (im) {
+          img = im;
+          var prev = renderPng(im, 400);
+          ['#lg-pv-wm', '#lg-pv-logo'].forEach(function (s) { var el = U.$(s, body); el.src = prev; el.style.display = ''; });
+          if (im.naturalWidth < 300) U.toast('Ảnh hơi nhỏ (' + im.naturalWidth + 'px) – bản in có thể bị mờ', 'warn');
+        }).catch(function () { U.toast('Không đọc được file ảnh', 'error'); });
+      };
+      U.$('#lg-op', body).oninput = function () {
+        U.$('#lg-opv', body).textContent = this.value + '%';
+        U.$('#lg-pv-wm', body).style.opacity = this.value / 100;
+      };
+      U.$('#lg-wm', body).onchange = function () { U.$('#lg-pv-wm', body).style.visibility = this.checked ? 'visible' : 'hidden'; };
+      U.$('#lg-save', body).onclick = function () {
+        var opacity = Number(U.$('#lg-op', body).value) / 100, enabled = U.$('#lg-wm', body).checked;
+        var btn = this; btn.disabled = true;
+        var job;
+        if (img) {
+          var thumb = '', widths = [240, 200, 160, 120, 96];
+          for (var i = 0; i < widths.length; i++) { thumb = renderPng(img, widths[i]); if (thumb.length <= 45000) break; }
+          if (thumb.length > 45000) { U.toast('Logo quá phức tạp, hãy dùng file đơn giản hơn', 'error'); btn.disabled = false; return; }
+          job = U.api('admin.logo.upload', { logo: renderPng(img, 900), thumb: thumb, watermark: renderPng(img, 900, opacity), opacity: opacity, enabled: enabled });
+        } else {
+          // Chỉ đổi bật/tắt & độ đậm (In nhanh áp dụng ngay; PDF/Word dùng độ đậm lúc tải logo – chọn lại file để cập nhật)
+          job = U.api('admin.settings.save', { items: [{ Key: 'WATERMARK_ENABLED', Value: enabled ? 'TRUE' : 'FALSE' }, { Key: 'WATERMARK_OPACITY', Value: String(opacity) }] });
+        }
+        job.then(refreshBoot).then(function () { U.toast(img ? 'Đã lưu logo & watermark' : 'Đã lưu cài đặt watermark'); general(body); })
+          .catch(function () {}).finally(function () { btn.disabled = false; });
+      };
+      var del = U.$('#lg-del', body);
+      if (del) del.onclick = function () {
+        U.confirm('Xóa logo', 'Phiếu kết quả và màn đăng nhập sẽ không còn logo.', 'Xóa', true).then(function (ok) {
+          if (ok) U.api('admin.logo.remove').then(refreshBoot).then(function () { U.toast('Đã xóa logo'); general(body); }).catch(function () {});
+        });
+      };
       U.$('#g-save', body).onclick = function () {
         var d = U.formData(U.$('#g-form', body));
         U.api('admin.settings.save', { items: Object.keys(d).map(function (k) { return { Key: k, Value: d[k] }; }) }).then(function () {
           U.toast('Đã lưu cấu hình');
-          return Api.call('auth.me');
-        }).then(function (boot) { if (boot) { App.state.settings = boot.settings; } }).catch(function () {});
+          return refreshBoot();
+        }).catch(function () {});
       };
     }).catch(function () {});
   }
@@ -464,7 +589,9 @@
         '<div class="col-4"><label class="form-label">Cách tính giá</label><select class="form-select" name="PricingMode"><option value="TEST"' + (p.PricingMode === 'TEST' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Giá trọn gói nhóm</option></select></div>' +
         '<div class="col-4"><label class="form-label">Giá nhóm (đ)</label><input class="form-control tabular" name="Price" value="' + esc(p.Price || 0) + '"></div>' +
         '<div class="col-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="p-act"' + (p.IsActive ? ' checked' : '') + '><label class="form-check-label" for="p-act">Đang sử dụng</label></div></div>' +
-        '<div class="col-12"><label class="form-label">ID mẫu in Google Docs riêng (tuỳ chọn)</label><input class="form-control mono" name="TemplateDocId" value="' + esc(p.TemplateDocId || '') + '" placeholder="Bỏ trống = dùng mẫu chuẩn tự sinh"></div>' +
+        '<div class="col-4"><label class="form-label">Khổ giấy in</label><select class="form-select" name="PageSize">' +
+          [['', 'Theo cấu hình chung (' + esc(App.setting('PRINT_PAGE_SIZE', 'A5')) + ')'], ['A4', 'A4'], ['A5', 'A5']].map(function (o2) { return '<option value="' + o2[0] + '"' + ((p.PageSize || '') === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="col-8"><label class="form-label">ID mẫu in Google Docs riêng (tuỳ chọn)</label><input class="form-control mono" name="TemplateDocId" value="' + esc(p.TemplateDocId || '') + '" placeholder="Bỏ trống = dùng mẫu chuẩn tự sinh"></div>' +
         '</form><label class="form-label mt-3">Chỉ số thuộc nhóm (thứ tự in theo thứ tự chọn)</label><div class="test-pick" style="max-height:260px;overflow:auto"><div class="d-flex flex-wrap column-gap-3">' +
         cat.tests.map(function (t) {
           return '<div class="form-check" style="min-width:220px"><input class="form-check-input" type="checkbox" id="pm-' + t.TestCode + '" value="' + t.TestCode + '"' + (members.indexOf(t.TestCode) > -1 ? ' checked' : '') + '>' +

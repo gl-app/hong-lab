@@ -77,6 +77,13 @@
         return { yyyy: p.year, MM: p.month, dd: p.day, HH: p.hour, mm: p.minute, ss: p.second }[tok];
       });
     },
+    base64Decode: function (str) {
+      var bin = typeof atob === 'function' ? atob(str) : Buffer.from(str, 'base64').toString('binary');
+      var out = [];
+      for (var i = 0; i < bin.length; i++) out.push(bin.charCodeAt(i));
+      return out;
+    },
+    newBlob: function (bytes, type, name) { return { bytes: bytes, type: type, name: name, getName: function () { return name; } }; },
     base64Encode: function (bytes) {
       var s = '';
       (bytes || []).forEach(function (b) { s += String.fromCharCode(b & 0xff); });
@@ -188,12 +195,17 @@
       return ss;
     }
   };
-  var fakeFile = { getParents: function () { return { hasNext: function () { return false; } }; }, moveTo: function () {} };
+  var fakeFile = { getParents: function () { return { hasNext: function () { return false; } }; }, moveTo: function () {}, setTrashed: function () {}, getBlob: function () { return null; } };
+  var fakeFolder = {
+    getFoldersByName: function () { return { hasNext: function () { return false; } }; },
+    createFolder: function () { return fakeFolder; },
+    createFile: function () { return { getId: function () { return 'demofile' + Math.random().toString(36).slice(2); } }; }
+  };
   var triggers = [];
   var tb = function (fn) { var b = { timeBased: function () { return b; }, everyMinutes: function () { return b; }, everyDays: function () { return b; }, atHour: function () { return b; },
     create: function () { triggers.push({ getHandlerFunction: function () { return fn; } }); } }; return b; };
   global.ScriptApp = global.ScriptApp || { getProjectTriggers: function () { return triggers; }, newTrigger: tb, getOAuthToken: function () { return ''; } };
-  global.DriveApp = global.DriveApp || { getFileById: function () { return fakeFile; } };
+  global.DriveApp = global.DriveApp || { getFileById: function () { return fakeFile; }, getRootFolder: function () { return fakeFolder; } };
 
   /* ------------------------------------------------------------- Cache / Lock / Properties */
   function makeCache() {

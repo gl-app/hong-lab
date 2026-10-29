@@ -10,48 +10,45 @@
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="assets/styles.css?v=1.2.0">
+  <link rel="stylesheet" href="assets/styles.css?v=1.5.2">
 </head>
 <body>
   <div id="loading-bar"></div>
 
   <!-- ============================ LOGIN ============================ -->
   <section id="login-view">
-    <div class="login-art">
-      <div class="d-flex align-items-center gap-3">
+    <div class="login-bg" id="login-bg" aria-hidden="true"></div>
+    <div class="login-dim" id="login-dim" aria-hidden="true"></div>
+    <header class="login-top">
+      <div class="login-brand">
         <div class="brand-logo" data-logo></div>
-        <div><div class="fw-bold" data-clinic-name>PHÒNG XN Y KHOA</div><div class="small opacity-75" data-clinic-address></div></div>
+        <div><div class="lb-name" data-clinic-name>PHÒNG XN Y KHOA</div><div class="lb-sub">Laboratory Information System</div></div>
       </div>
-      <div>
-        <h1>Hệ thống quản lý xét nghiệm</h1>
-        <p>Tiếp nhận phiếu, nhập kết quả, theo dõi lịch sử chỉ số, nhắc tái khám và thống kê doanh thu – tập trung một nơi.</p>
-      </div>
-      <div class="small opacity-75">LIS <span data-app-version></span></div>
-    </div>
-    <div class="login-panel">
+    </header>
+    <main class="login-center">
       <form class="login-card" id="login-form" autocomplete="on">
-        <div class="brand-logo mb-3" data-logo></div>
-        <h4 class="fw-bold mb-1">Đăng nhập</h4>
-        <p class="text-muted mb-4" data-clinic-name>PHÒNG XN Y KHOA</p>
-        <div class="mb-3">
-          <label class="form-label" for="login-user">Tên đăng nhập</label>
-          <input class="form-control form-control-lg" id="login-user" name="username" autocomplete="username" required autofocus>
+        <div class="lc-head">
+          <div class="brand-logo lc-logo" data-logo></div>
+          <h1>Đăng nhập hệ thống</h1>
+          <p>Quản lý phiếu xét nghiệm, kết quả và báo cáo</p>
         </div>
-        <div class="mb-3">
-          <label class="form-label" for="login-pass">Mật khẩu</label>
-          <div class="input-group">
-            <input class="form-control form-control-lg" id="login-pass" name="password" type="password" autocomplete="current-password" required>
-            <button class="btn btn-outline-secondary" type="button" id="toggle-pass" aria-label="Hiện mật khẩu"><i class="bi bi-eye"></i></button>
-          </div>
+        <div class="lc-group">
+          <label class="lc-label" for="login-user">Tên đăng nhập</label>
+          <div class="lc-field"><i class="bi bi-person" aria-hidden="true"></i>
+            <input id="login-user" name="username" autocomplete="username" placeholder="Nhập tên đăng nhập" required autofocus></div>
         </div>
-        <div class="alert alert-danger py-2 small d-none" id="login-error"></div>
-        <button class="btn btn-primary btn-lg w-100" type="submit" id="login-btn">Đăng nhập</button>
-        <div class="demo-hint mt-4 d-none" id="demo-hint">
-          <b>Chế độ DEMO</b> – dữ liệu giả, lưu trong trình duyệt.<br>
-          Tài khoản: <span class="kbd">admin / Admin@123</span> · <span class="kbd">bacsi</span> · <span class="kbd">ktv</span> · <span class="kbd">letan</span> (mật khẩu <span class="kbd">demo123</span>)
+        <div class="lc-group">
+          <label class="lc-label" for="login-pass">Mật khẩu</label>
+          <div class="lc-field"><i class="bi bi-lock" aria-hidden="true"></i>
+            <input id="login-pass" name="password" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu" required>
+            <button type="button" class="lc-eye" id="toggle-pass" aria-label="Hiện mật khẩu"><i class="bi bi-eye"></i></button></div>
         </div>
+        <div class="alert alert-danger py-2 small d-none mb-0" id="login-error"></div>
+        <button class="lc-submit" type="submit" id="login-btn">Đăng nhập</button>
+        <div class="lc-foot">LIS <span data-app-version></span></div>
       </form>
-    </div>
+    </main>
+    <footer class="login-copy">© <span id="login-year"></span> <span data-clinic-name>PHÒNG XN Y KHOA</span> · Kết nối bảo mật</footer>
   </section>
 
   <!-- ============================ APP SHELL ============================ -->
@@ -88,15 +85,15 @@
     <div class="modal-dialog modal-dialog-scrollable"><div class="modal-content" id="app-modal-content"></div></div>
   </div>
   <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
-  <iframe id="print-frame" title="print" style="position:absolute;width:0;height:0;border:0;left:-9999px"></iframe>
+  <iframe id="print-frame" title="print" style="position:fixed;width:900px;height:1300px;border:0;left:-10000px;top:0"></iframe>
 
-  <script src="config.js?v=1.2.0"></script>
+  <script src="config.js?v=1.5.2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="assets/api.js?v=1.2.0"></script>
-  <script src="assets/app.js?v=1.2.0"></script>
-  <script src="assets/views-order.js?v=1.2.0"></script>
-  <script src="assets/views-admin.js?v=1.2.0"></script>
+  <script src="assets/api.js?v=1.5.2"></script>
+  <script src="assets/app.js?v=1.5.2"></script>
+  <script src="assets/views-order.js?v=1.5.2"></script>
+  <script src="assets/views-admin.js?v=1.5.2"></script>
 </body>
 </html>

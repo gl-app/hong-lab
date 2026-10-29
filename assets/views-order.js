@@ -60,6 +60,9 @@
         (known ? '' : '<option selected>' + esc(value) + '</option>') + '</select>';
     }
     var wide = t.ResultType === 'TEXT' ? ' style="max-width:none"' : '';
+    if (App.Calc.is(t.TestCode)) {
+      return '<input class="' + cls + ' res-calc" data-test="' + t.TestCode + '" value="' + esc(value || '') + '" readonly tabindex="-1" placeholder="Tự tính" title="Tự tính: ' + esc(App.Calc.label(t.TestCode)) + '">';
+    }
     return '<input class="' + cls + '" data-test="' + t.TestCode + '" value="' + esc(value || '') + '"' + dis + wide +
       (t.ResultType === 'NUM' ? ' inputmode="decimal"' : '') + ' ' + attrs + '>';
   }
@@ -72,24 +75,38 @@
         var r = resMap[t.TestCode] || {};
         var ref = App.refFor(t, gender).text;
         var f = App.flag(t, r.Value, gender) || r.Flag || '';
-        return '<tr><td class="text-muted">' + (i + 1) + '</td><td><div class="fw-medium">' + esc(t.TestName) + '</div><div class="small text-muted mono">' + t.TestCode + '</div></td>' +
+        return '<tr><td class="text-muted">' + (i + 1) + '</td><td><div class="fw-medium">' + esc(t.TestName) + (App.Calc.is(t.TestCode) ? ' <span class="badge text-bg-light" title="' + esc(App.Calc.label(t.TestCode)) + '">ƒ tự tính</span>' : '') + '</div><div class="small text-muted mono">' + t.TestCode + '</div></td>' +
           '<td>' + resultInput(t, r.Value, gender, disabled) + '</td><td class="small text-muted">' + esc(t.Unit || '') + '</td>' +
           '<td class="small">' + esc(ref) + '</td><td class="small flag-cell flag-' + f + '">' + U.flagLabel(f) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
   }
 
   /** Live flag colouring + Enter → next input. */
-  function bindResultInputs(root, getGender) {
-    U.on(root, 'input', '.res-input', function (e, el) { updateFlag(el, getGender()); });
-    U.on(root, 'change', '.res-input', function (e, el) { updateFlag(el, getGender()); });
+  /** getCtx() → { gender, age }. Chỉ số tự tính (LDL, eGFR) cập nhật ngay khi nhập chỉ số trung gian. */
+  function bindResultInputs(root, getCtx) {
+    var ctxOf = function () { var c = getCtx(); return typeof c === 'string' ? { gender: c } : c; };
+    var onEdit = function (e, el) { updateFlag(el, ctxOf().gender); recalcCalc(root, ctxOf()); };
+    U.on(root, 'input', '.res-input', onEdit);
+    U.on(root, 'change', '.res-input', onEdit);
     U.on(root, 'keydown', 'input.res-input', function (e, el) {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      var all = U.$$('.res-input:not([disabled])', root);
+      var all = U.$$('.res-input:not([disabled]):not([readonly])', root);
       var nx = all[all.indexOf(el) + 1];
       if (nx) nx.focus();
     });
   }
+  function recalcCalc(root, ctx) {
+    var calcs = U.$$('.res-calc', root);
+    if (!calcs.length) return;
+    var vals = {};
+    U.$$('.res-input:not(.res-calc)', root).forEach(function (el) { var k = el.getAttribute('data-test'); if (el.value.trim() !== '' || vals[k] === undefined) vals[k] = el.value.trim(); });
+    calcs.forEach(function (el) {
+      var v = App.Calc.compute(el.getAttribute('data-test'), vals, ctx);
+      if (el.value !== v) { el.value = v; updateFlag(el, ctx.gender); }
+    });
+  }
+  App.recalcCalc = recalcCalc;
   function updateFlag(el, gender) {
     var t = App.test(el.getAttribute('data-test'));
     var f = App.flag(t, el.value, gender);
@@ -99,7 +116,7 @@
     if (cell) { cell.className = 'small flag-cell flag-' + f; cell.textContent = U.flagLabel(f); }
   }
   function collectResults(table) {
-    return U.$$('.res-input', table).map(function (el) { return { testCode: el.getAttribute('data-test'), value: el.value.trim() }; });
+    return U.$$('.res-input:not(.res-calc)', table).map(function (el) { return { testCode: el.getAttribute('data-test'), value: el.value.trim() }; });
   }
 
   /* ================================================================ VIEW: ORDER NEW */
@@ -117,7 +134,7 @@
           '<div class="col-sm-4"><label class="form-label">Ngày khám</label><input type="date" class="form-control" id="o-date" value="' + U.today() + '"></div>' +
           '<div class="col-sm-8"><label class="form-label">Bác sĩ chỉ định</label><input class="form-control" id="o-doctor" list="dl-doctor" value="' + esc(App.setting('DEFAULT_DOCTOR', '')) + '">' +
             '<datalist id="dl-doctor">' + App.state.catalog.doctors.filter(function (d) { return d.IsActive; }).map(function (d) { return '<option value="' + esc(d.DoctorName) + '">'; }).join('') + '</datalist></div>' +
-          '<div class="col-12"><label class="form-label">Người phụ trách <span class="text-muted">(mặc định là bạn – bấm để chọn thêm / đổi người khác)</span></label><div id="o-assign"></div></div>' +
+          '<div class="col-12"><label class="form-label">Người phụ trách <span class="text-muted">(mặc định là bạn – bấm để chọn thêm / đổi người khác; không gồm Quản trị hệ thống)</span></label><div id="o-assign"></div></div>' +
         '</div>' +
         '<label class="form-label">Nhóm xét nghiệm <span class="text-muted">(chọn nhiều)</span></label>' +
         '<div class="panel-grid mb-2" id="panel-grid">' + App.activePanels().map(function (p) {
@@ -244,19 +261,51 @@
     U.on(grid, 'click', '.panel-tile', function (e, el) { togglePanel(el.getAttribute('data-panel')); });
     U.on(grid, 'keydown', '.panel-tile', function (e, el) { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); togglePanel(el.getAttribute('data-panel')); } });
 
+    var pricing = { amounts: {}, dup: {} };
+    function selection() { var o = {}; Object.keys(st.panels).forEach(function (c) { o[c] = st.panels[c].tests; }); return o; }
+    /** Chọn chỉ số tự tính → tự chọn chỉ số trung gian; bỏ chỉ số trung gian → bỏ chỉ số tự tính phụ thuộc. */
+    function enforceDeps(code, changed, checked) {
+      var orderOf = function (pc) { var all = App.testsOfPanel(pc).map(function (t) { return t.TestCode; }); st.panels[pc].tests = all.filter(function (c) { return st.panels[pc].tests.indexOf(c) > -1; }); };
+      var inOrder = function (t) { return Object.keys(st.panels).some(function (pc) { return st.panels[pc].tests.indexOf(t) > -1; }); };
+      var msgs = [];
+      if (checked && App.Calc.is(changed)) {
+        App.Calc.deps(changed).forEach(function (d) {
+          if (inOrder(d)) return;
+          var target = App.testsOfPanel(code).some(function (t) { return t.TestCode === d; }) ? code
+            : Object.keys(st.panels).filter(function (pc) { return App.testsOfPanel(pc).some(function (t) { return t.TestCode === d; }); })[0];
+          if (target) { st.panels[target].tests.push(d); orderOf(target); msgs.push(App.test(d).TestName); }
+        });
+        if (msgs.length) U.toast(App.test(changed).TestName + ' tự tính → đã chọn thêm: ' + msgs.join(', '));
+      }
+      if (!checked && !inOrder(changed)) {
+        Object.keys(st.panels).forEach(function (pc) {
+          App.Calc.dependents(changed, st.panels[pc].tests).forEach(function (c) {
+            st.panels[pc].tests = st.panels[pc].tests.filter(function (x) { return x !== c; });
+            msgs.push(App.test(c).TestName);
+          });
+        });
+        if (msgs.length) U.toast('Bỏ ' + App.test(changed).TestName + ' → bỏ luôn chỉ số tự tính: ' + msgs.join(', '), 'warn');
+      }
+      orderOf(code);
+    }
     function renderTestPicks() {
+      pricing = App.priceLines(selection());
       var box = U.$('#test-picks', view);
       box.innerHTML = Object.keys(st.panels).map(function (code) {
         var p = App.panel(code);
         var tests = App.testsOfPanel(code);
         var sel = st.panels[code].tests;
+        var dup = pricing.dup[code] || {};
         return '<div class="test-pick mb-2" data-panel="' + code + '"><div class="d-flex align-items-center mb-1"><b class="me-2">' + esc(p.PanelName) + '</b>' +
           '<span class="small text-muted">' + sel.length + '/' + tests.length + ' chỉ số</span><div class="ms-auto">' +
           '<button class="btn btn-link btn-sm p-0 me-2" data-all="' + code + '">Chọn hết</button><button class="btn btn-link btn-sm p-0" data-none="' + code + '">Bỏ hết</button></div></div>' +
           '<div class="d-flex flex-wrap column-gap-3">' + tests.map(function (t) {
             var id = 'tp-' + code + '-' + t.TestCode;
             return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + id + '" data-p="' + code + '" data-t="' + t.TestCode + '"' + (sel.indexOf(t.TestCode) > -1 ? ' checked' : '') + '>' +
-              '<label class="form-check-label small" for="' + id + '">' + esc(t.TestName) + (p.PricingMode === 'TEST' && t.Price ? ' <span class="text-muted">' + U.num(t.Price) + '</span>' : '') + '</label></div>';
+              '<label class="form-check-label small" for="' + id + '">' + esc(t.TestName) +
+              (App.Calc.is(t.TestCode) ? ' <span class="badge text-bg-light" title="Tự tính: ' + esc(App.Calc.label(t.TestCode)) + '">ƒ</span>' : '') +
+              (dup[t.TestCode] && sel.indexOf(t.TestCode) > -1 ? ' <span class="text-success" title="Chỉ số trùng – chỉ tính tiền 1 lần">đã tính ở ' + dup[t.TestCode] + '</span>'
+                : (p.PricingMode === 'TEST' && t.Price ? ' <span class="text-muted">' + U.num(t.Price) + '</span>' : '')) + '</label></div>';
           }).join('') + '</div></div>';
       }).join('');
     }
@@ -264,9 +313,8 @@
     U.on(picks, 'change', 'input[data-t]', function (e, el) {
       var code = el.getAttribute('data-p');
       st.panels[code].tests = U.$$('input[data-p="' + code + '"]:checked', picks).map(function (x) { return x.getAttribute('data-t'); });
-      var head = el.closest('.test-pick').querySelector('.small.text-muted');
-      head.textContent = st.panels[code].tests.length + '/' + App.testsOfPanel(code).length + ' chỉ số';
-      refreshResults(); recalc();
+      enforceDeps(code, el.getAttribute('data-t'), el.checked);
+      renderTestPicks(); refreshResults(); recalc();
     });
     U.on(picks, 'click', '[data-all],[data-none]', function (e, el) {
       var code = el.getAttribute('data-all') || el.getAttribute('data-none');
@@ -294,21 +342,19 @@
         var el = e.target.closest('.res-input');
         if (!el) return;
         U.$$('#res-box .res-input[data-test="' + el.getAttribute('data-test') + '"]', view).forEach(function (o) {
-          if (o !== el && o.value !== el.value) { o.value = el.value; updateFlag(o, st.patient ? st.patient.Gender : 'Nam'); }
+          if (o !== el && !o.classList.contains('res-calc') && o.value !== el.value) { o.value = el.value; updateFlag(o, st.patient ? st.patient.Gender : 'Nam'); }
         });
       });
-      bindResultInputs(U.$('#res-box', view), function () { return st.patient ? st.patient.Gender : 'Nam'; });
+      bindResultInputs(U.$('#res-box', view), function () {
+        var y = Number(String(U.$('#o-date', view).value).substring(0, 4)) || new Date().getFullYear();
+        return { gender: st.patient ? st.patient.Gender : 'Nam', age: st.patient && st.patient.BirthYear ? y - st.patient.BirthYear : 0 };
+      });
     }
 
     /* ---------- Money */
-    function lineAmount(code) {
-      var p = App.panel(code);
-      if (p.PricingMode === 'PANEL') return Number(p.Price || 0);
-      var s = st.panels[code].tests.reduce(function (a, c) { var t = App.test(c); return a + (t ? Number(t.Price || 0) : 0); }, 0);
-      return s || Number(p.Price || 0);
-    }
     function recalc() {
-      var gross = Object.keys(st.panels).reduce(function (a, c) { return a + lineAmount(c); }, 0);
+      var pr = App.priceLines(selection());
+      var gross = Object.keys(st.panels).reduce(function (a, c) { return a + (pr.amounts[c] || 0); }, 0);
       var disc = Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0;
       U.$('#o-gross', view).textContent = U.money(gross);
       U.$('#o-net', view).textContent = U.money(Math.max(0, gross - disc));
@@ -489,7 +535,7 @@
         box.innerHTML = resultTableHtml(code, op.TestCodes, resMap[code] || {}, o.Gender, !canEnter) +
           (canEnter ? '<div class="d-flex gap-2 justify-content-end mt-3"><span class="small text-muted me-auto align-self-center"><span class="kbd">Enter</span> chuyển ô kế tiếp</span>' +
             '<button class="btn btn-primary" id="d-save-res"><i class="bi bi-save"></i> Lưu kết quả ' + code + '</button></div>' : '');
-        bindResultInputs(box, function () { return o.Gender; });
+        bindResultInputs(box, function () { return { gender: o.Gender, age: o.Age }; });
         var btn = U.$('#d-save-res', box);
         if (btn) btn.onclick = function () {
           btn.disabled = true;
@@ -638,48 +684,93 @@
     var o = data.order;
     codes = codes || data.panels.map(function (p) { return p.PanelCode; });
     var onlyResulted = String(s.PRINT_ONLY_RESULTED || 'TRUE').toUpperCase() !== 'FALSE';
-    var size = String(s.PRINT_PAGE_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5';
+    var size = String(s.PRINT_PAGE_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5';   // khổ mặc định; từng nhóm có thể đặt riêng (Panels.PageSize)
+    var SZ = { A4: { w: '192mm', h: 297, base: 11, sig: '4.6em' }, A5: { w: '130mm', h: 210, base: 9.5, sig: '4.2em' } };
+    var firstSize = null;
     var od = o.OrderDate.split('-');
     var now = new Date();
+    var logo = s.CLINIC_LOGO_DATA || s.CLINIC_LOGO_URL || '';
+    var wmOn = logo && String(s.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE';
+    var wmOp = Math.min(0.3, Math.max(0.03, Number(s.WATERMARK_OPACITY) || 0.08));
     var pages = codes.map(function (code) {
       var p = App.panel(code) || { PanelName: code, PrintTitle: 'PHIẾU KẾT QUẢ XÉT NGHIỆM' };
+      var psz = p.PageSize === 'A4' || p.PageSize === 'A5' ? p.PageSize : size;
+      if (!firstSize) firstSize = psz;
       var op = data.panels.filter(function (x) { return x.PanelCode === code; })[0] || { TestCodes: [] };
       var res = {};
       data.results.filter(function (r) { return r.PanelCode === code; }).forEach(function (r) { res[r.TestCode] = r; });
       var tests = App.testsOfPanel(code).filter(function (t) {
         return (!op.TestCodes.length || op.TestCodes.indexOf(t.TestCode) > -1) && (!onlyResulted || (res[t.TestCode] && res[t.TestCode].Value !== ''));
       });
-      return '<section class="page"><header><div class="logo">' + (s.CLINIC_LOGO_URL ? '<img src="' + esc(s.CLINIC_LOGO_URL) + '">' : '') + '</div><div>' +
-        '<div class="cn">' + esc(s.CLINIC_NAME || '') + '</div><div class="ci">' + esc(s.CLINIC_LICENSE || '') + '</div><div class="ci">' + esc(s.CLINIC_ADDRESS || '') + '</div>' +
-        '<div class="ci">' + (s.CLINIC_PHONE ? 'ĐT: ' + esc(s.CLINIC_PHONE) : '') + '</div></div></header>' +
-        '<h1>' + esc(p.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM') + '</h1>' + (p.PrintSubtitle ? '<h2>' + esc(p.PrintSubtitle) + '</h2>' : '') +
-        '<div class="ids">Mã phiếu: ' + o.OrderID + ' · Mã BN: ' + esc(o.PatientID) + '</div>' +
-        '<table class="info"><tr><td style="width:58%">Họ và tên: <b>' + esc(o.PatientName) + '</b></td><td>Tuổi: ' + (o.Age === null ? '' : o.Age) + '</td><td>Giới tính: ' + esc(o.Gender || '') + '</td></tr>' +
-        '<tr><td colspan="3">Địa chỉ: ' + esc(o.Address || '') + '</td></tr><tr><td colspan="3">Bác sĩ chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>' +
-        '<table class="res"><thead><tr><th>STT</th><th>XÉT NGHIỆM</th><th>KẾT QUẢ</th><th>ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
-        (tests.length ? tests.map(function (t, i) {
-          var r = res[t.TestCode] || {};
-          var ab = r.Flag && r.Flag !== 'N';
-          var mark = r.Flag === 'H' ? ' ↑' : (r.Flag === 'L' ? ' ↓' : '');
-          return '<tr><td class="c">' + (i + 1) + '</td><td>' + esc(t.TestName) + '</td><td class="c' + (ab ? ' ab' : '') + '">' + esc(r.Value || '') + mark + '</td><td class="c">' + esc(t.Unit || '') + '</td><td>' + esc(r.RefText || App.refFor(t, o.Gender).text) + '</td></tr>';
-        }).join('') : '<tr><td colspan="5" class="c">(Chưa có kết quả)</td></tr>') + '</tbody></table>' +
-        '<table class="foot"><tr><td>Ngày khám: ' + U.vnDate(o.OrderDate) + '</td><td class="c mu">' + esc(s.CLINIC_CITY || 'Pleiku') + ', ngày ' + Number(od[2]) + ' tháng ' + Number(od[1]) + ' năm ' + od[0] + '</td></tr>' +
-        '<tr><td>Ngày tái khám: ' + (o.FollowUpDate ? U.vnDate(o.FollowUpDate) : '') + '</td><td class="c"><b>TP. XÉT NGHIỆM</b></td></tr><tr><td></td><td class="c sig"><b>' + esc(s.LAB_HEAD || '') + '</b></td></tr></table>' +
-        '<div class="note">' + now.toLocaleTimeString('vi-VN') + ' ' + now.toLocaleDateString('vi-VN') + ' · ' + esc(s.REPORT_FOOTER || '') + '</div></section>';
+      var anyAbn = false;
+      var rowsHtml = tests.length ? tests.map(function (t, i) {
+        var r = res[t.TestCode] || {};
+        var ab = r.Flag && r.Flag !== 'N';
+        if (ab) anyAbn = true;
+        var mark = r.Flag === 'H' ? ' ↑' : (r.Flag === 'L' ? ' ↓' : '');
+        return '<tr><td class="c mu">' + (i + 1) + '</td><td class="tn">' + esc(t.TestName) + '</td><td class="c rv' + (ab ? ' ab' : '') + '">' + esc(r.Value || '') + mark + '</td>' +
+          '<td class="c mu">' + esc(t.Unit || '') + '</td><td class="rf">' + esc(r.RefText || App.refFor(t, o.Gender).text) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="c mu" style="padding:10px">(Chưa có kết quả)</td></tr>';
+      return '<section class="page sz-' + psz.toLowerCase() + '" data-sz="' + psz + '">' +
+        '<header><div class="logo">' + (logo ? '<img src="' + esc(logo) + '" alt="">' : '') + '</div><div class="org">' +
+          '<div class="cn">' + esc(s.CLINIC_NAME || '') + '</div>' +
+          '<div class="ci">' + esc([s.CLINIC_LICENSE, s.CLINIC_ADDRESS].filter(Boolean).join(' · ')) + '</div>' +
+          '<div class="ci">' + (s.CLINIC_PHONE ? 'Điện thoại: ' + esc(s.CLINIC_PHONE) : '') + '</div></div></header>' +
+        '<div class="ttl"><h1>' + esc(p.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM') + '</h1>' + (p.PrintSubtitle ? '<h2>' + esc(p.PrintSubtitle) + '</h2>' : '') + '</div>' +
+        '<table class="info"><tr><td class="w60">Họ và tên: <b class="pn">' + esc(o.PatientName) + '</b></td><td>Tuổi: <b>' + (o.Age === null ? '' : o.Age) + '</b>' +
+          '<span class="sp"></span>Giới tính: <b>' + esc(o.Gender || '') + '</b></td></tr>' +
+          '<tr><td>Mã BN: <b class="mono">' + esc(o.PatientID) + '</b></td><td>Ngày khám: <b>' + U.vnDate(o.OrderDate) + '</b></td></tr>' +
+          '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>' +
+        '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
+          rowsHtml + '</tbody></table>' +
+        (anyAbn ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
+        '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') + '</td>' +
+          '<td class="fr"><div class="mu">' + esc(s.CLINIC_CITY || 'Pleiku') + ', ngày ' + Number(od[2]) + ' tháng ' + Number(od[1]) + ' năm ' + od[0] + '</div>' +
+          '<div class="role">TRƯỞNG PHÒNG XÉT NGHIỆM</div><div class="sig"></div><div class="nm">' + esc(s.LAB_HEAD || '') + '</div></td></tr></table>' +
+        '<div class="note">' + esc(s.REPORT_FOOTER || '') + '<span class="pt">In lúc ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) + ' ' + now.toLocaleDateString('vi-VN') + '</span></div>' +
+        '</section>';
     }).join('');
-    var css = '@page{size:' + size + ' portrait;margin:9mm 9mm 8mm 10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#1f2933;margin:0;font-size:' + (size === 'A4' ? '11.5' : '10') + 'pt}' +
-      '.page{page-break-after:always}.page:last-child{page-break-after:auto}header{display:flex;gap:10px;align-items:center;border-bottom:1.5px solid #0f4c5c;padding-bottom:6px}' +
-      '.logo img{height:48px}.cn{font-weight:700;color:#0f4c5c;font-size:1.2em}.ci{font-size:.8em;color:#5f6b7a}h1{text-align:center;color:#0f4c5c;font-size:1.3em;margin:10px 0 0}' +
-      'h2{text-align:center;color:#0f4c5c;font-size:1.1em;margin:2px 0 0}.ids{text-align:center;font-size:.78em;color:#5f6b7a;margin:2px 0 6px}table{width:100%;border-collapse:collapse}' +
-      '.info td{padding:1.5px 0}.res{margin-top:6px}.res th{background:#e6f0f2;color:#0f4c5c;font-size:.82em;padding:4px;border:.5pt solid #9aa5b1}.res td{border:.5pt solid #9aa5b1;padding:3px 4px}' +
-      '.c{text-align:center}.ab{color:#b42318;font-weight:700}.foot{margin-top:10px}.foot td{width:50%;padding:1px 0}.mu{color:#5f6b7a;font-size:.9em}.sig{padding-top:34px!important}' +
-      '.note{font-size:.7em;color:#5f6b7a;font-style:italic;margin-top:6px}';
+    var pm = 'margin:8mm 9mm 8mm 9mm}';
+    var css = '@page{size:' + (firstSize || size) + ' portrait;' + pm + '@page a4{size:A4 portrait;' + pm + '@page a5{size:A5 portrait;' + pm + '*{box-sizing:border-box}' +
+      'body{font-family:Arial,"Helvetica Neue",Helvetica,"Segoe UI",sans-serif;color:#1f2933;margin:0;line-height:1.35}' +
+      '.page{position:relative;z-index:1;page-break-after:always;page-break-inside:avoid}' +
+      '.sz-a4{page:a4;width:' + SZ.A4.w + ';font-size:' + SZ.A4.base + 'pt}.sz-a5{page:a5;width:' + SZ.A5.w + ';font-size:' + SZ.A5.base + 'pt}' +
+      '.sz-a4 .sig{height:' + SZ.A4.sig + '}.sz-a5 .sig{height:' + SZ.A5.sig + '}.page:last-child{page-break-after:auto}' +
+      'header{display:flex;gap:10px;align-items:center;padding-bottom:6px;border-bottom:2px solid #0f4c5c}' +
+      '.logo img{height:46px;width:auto;display:block}.org{flex:1}.cn{font-weight:700;color:#0f4c5c;font-size:1.25em;letter-spacing:.02em}' +
+      '.ci{font-size:.8em;color:#5f6b7a}' +
+      '.ttl{text-align:center;margin:.75em 0 .6em}h1{color:#0f4c5c;font-size:1.32em;margin:0;letter-spacing:.03em}h2{color:#0f4c5c;font-size:1.08em;margin:1px 0 0;font-weight:700}' +
+      'table{width:100%;border-collapse:collapse}' +
+      '.info{background:rgba(15,76,92,.05);border:1px solid #d5e2e5;border-radius:4px;margin-bottom:.6em}.info td{padding:.25em .65em;vertical-align:top}.w60{width:60%}' +
+      '.pn{font-size:1.08em;letter-spacing:.02em}.sp{display:inline-block;width:14px}.mono{font-family:Consolas,"Courier New",monospace}' +
+      '.res th{background:#0f4c5c;color:#fff;font-size:.8em;font-weight:700;padding:.5em .4em;border:.5pt solid #0f4c5c;letter-spacing:.03em}' +
+      '.res td{border:.5pt solid #c3ced4;padding:.32em .45em}.res tbody tr:nth-child(even) td{background:rgba(15,76,92,.045)}' +
+      '.c{text-align:center}.mu{color:#5f6b7a}.tn{font-weight:600}.rv{font-weight:700;font-size:1.04em}.rf{font-size:.9em}.ab{color:#b42318}' +
+      '.legend{font-size:.78em;color:#5f6b7a;margin-top:4px}' +
+      '.foot{margin-top:1em;page-break-inside:avoid;break-inside:avoid}.foot td{vertical-align:top}.fl{width:40%;padding-top:2px}.fr{width:60%;text-align:center}.fr .mu,.role,.nm{white-space:nowrap}' +
+      '.role{font-weight:700;margin-top:2px;letter-spacing:.02em}.nm{font-weight:700}' +
+      '.note{font-size:.7em;color:#5f6b7a;font-style:italic;margin-top:.8em;padding-top:.4em;border-top:1px solid #e3e9ec}.pt{float:right;font-style:normal}' +
+      '.wm{position:fixed;left:50%;top:54%;width:60%;transform:translate(-50%,-50%);opacity:' + wmOp + ';z-index:0;pointer-events:none}' +
+      '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}';
     var frame = document.getElementById('print-frame');
+    // iframe phải có kích thước thật (đặt ngoài màn hình) để đo chiều cao chính xác khi tự co cho vừa trang
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1300px;border:0;';
     var doc = frame.contentWindow.document;
     doc.open();
-    doc.write('<!doctype html><html><head><meta charset="utf-8"><title>' + o.OrderID + '</title><style>' + css + '</style></head><body>' + pages + '</body></html>');
+    doc.write('<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>' + esc(o.PatientID + ' ' + o.PatientName) + '</title><style>' + css + '</style></head><body>' +
+      (wmOn ? '<img class="wm" src="' + esc(logo) + '" alt="">' : '') + pages + '</body></html>');
     doc.close();
-    setTimeout(function () { frame.contentWindow.focus(); frame.contentWindow.print(); }, 350);
+    // Tự co chữ cho mỗi phiếu vừa đúng 1 trang (giữ chữ ký + tên Trưởng phòng ở trang 1)
+    var fitPages = function () {
+      Array.prototype.forEach.call(doc.querySelectorAll('.page'), function (pg) {
+        var cfg = SZ[pg.getAttribute('data-sz')] || SZ[size];
+        var maxH = Math.floor((cfg.h - 16) * 96 / 25.4) - 6;   // chiều cao vùng in (px)
+        var basePt = cfg.base;
+        var k = 1;
+        while (pg.scrollHeight > maxH && k > 0.7) { k = Math.round((k - 0.03) * 100) / 100; pg.style.fontSize = (basePt * k).toFixed(2) + 'pt'; }
+      });
+    };
+    setTimeout(function () { try { fitPages(); } catch (e) { /* đo lỗi → in bình thường */ } frame.contentWindow.focus(); frame.contentWindow.print(); }, 350);
   };
 
   /* ================================================================ HISTORY COMPONENT */

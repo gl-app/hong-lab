@@ -277,6 +277,8 @@
     var btn = el.querySelector('button'), menu = el.querySelector(inline ? '.dropdown-menu-inline' : '.dropdown-menu');
     function label() { btn.textContent = selected.length ? App.Users.names(selected) : '— Chưa phân công —'; }
     App.Users.load().then(function (users) {
+      // Chỉ giữ người có trong danh sách được phép phụ trách (loại Quản trị hệ thống)
+      selected = selected.filter(function (s) { return users.some(function (u) { return u.Username === s; }); });
       menu.innerHTML = users.map(function (u, i) {
         var id = 'asg-' + Math.random().toString(36).slice(2, 7) + i;
         return '<div class="form-check py-1"><input class="form-check-input" type="checkbox" id="' + id + '" value="' + U.esc(u.Username) + '"' + (selected.indexOf(u.Username) > -1 ? ' checked' : '') + '>' +
@@ -289,6 +291,60 @@
       label();
     });
     return { get: function () { return selected.slice(); } };
+  };
+
+  /* ================================================================ CALC (xem trước – server là nguồn chính) */
+  App.Calc = (function () {
+    var DEF = {
+      LDL_FRIEDEWALD: { deps: ['TG', 'CHOL', 'HDL'], dec: 2, label: 'Cholesterol − HDL − Triglycerid/2.2',
+        fn: function (v) { if (!(v.TG > 0 && v.CHOL > 0 && v.HDL > 0)) return null; var r = v.CHOL - v.HDL - v.TG / 2.2; return r > 0 ? r : null; } },
+      EGFR_CKD_EPI_2021: { deps: ['CREA'], dec: 0, label: 'CKD-EPI 2021 từ Creatinin, giới, tuổi',
+        fn: function (v, c) {
+          if (!(v.CREA > 0) || !(c.age > 0)) return null;
+          var k = c.female ? 0.7 : 0.9, a = c.female ? -0.241 : -0.302, s = v.CREA / 88.4 / k;
+          return 142 * Math.pow(Math.min(s, 1), a) * Math.pow(Math.max(s, 1), -1.2) * Math.pow(0.9938, c.age) * (c.female ? 1.012 : 1);
+        } }
+    };
+    var DEFAULT = { LDL: 'LDL_FRIEDEWALD', EGFR: 'EGFR_CKD_EPI_2021' };
+    function f(code) { var t = App.test(code); var k = (t && t.Formula) || DEFAULT[code]; return k ? DEF[k] : null; }
+    return {
+      is: function (code) { return !!f(code); },
+      deps: function (code) { var x = f(code); return x ? x.deps.slice() : []; },
+      label: function (code) { var x = f(code); return x ? x.label : ''; },
+      /** Các chỉ số tự tính phụ thuộc vào `dep`. */
+      dependents: function (dep, codes) { return (codes || []).filter(function (c) { var x = f(c); return x && x.deps.indexOf(dep) > -1; }); },
+      compute: function (code, values, ctx) {
+        var x = f(code);
+        if (!x) return '';
+        var v = {};
+        x.deps.forEach(function (d) { var n = Number(String(values[d] === undefined ? '' : values[d]).replace(',', '.')); v[d] = isNaN(n) || values[d] === '' ? null : n; });
+        var r = x.fn(v, { age: Number(ctx.age) || 0, female: ctx.gender === 'Nữ' });
+        if (r === null || !isFinite(r)) return '';
+        var m = Math.pow(10, x.dec);
+        return String(Math.round(r * m) / m);
+      }
+    };
+  })();
+
+  /**
+   * Tiền từng nhóm khi chỉ số trùng chỉ tính 1 lần (giống backend buildLines_).
+   * sel: { PanelCode: [TestCode] } theo thứ tự chọn → { amounts: {PanelCode: n}, dup: {PanelCode: {TestCode: 'tính ở X'}} }
+   */
+  App.priceLines = function (sel) {
+    var covered = {}, charged = {}, amounts = {}, dup = {};
+    Object.keys(sel).forEach(function (pc) { var p = App.panel(pc); if (p && p.PricingMode === 'PANEL') sel[pc].forEach(function (c) { covered[c] = pc; }); });
+    Object.keys(sel).forEach(function (pc) {
+      var p = App.panel(pc); dup[pc] = {};
+      if (p.PricingMode === 'PANEL') { amounts[pc] = Number(p.Price || 0); return; }
+      var unpriced = sel[pc].every(function (c) { var t = App.test(c); return !(t && Number(t.Price)); });
+      var a = 0;
+      sel[pc].forEach(function (c) {
+        if (covered[c] || charged[c]) { dup[pc][c] = covered[c] || charged[c]; return; }
+        charged[c] = pc; var t = App.test(c); a += t ? Number(t.Price || 0) : 0;
+      });
+      amounts[pc] = unpriced ? Number(p.Price || 0) : a;
+    });
+    return { amounts: amounts, dup: dup };
   };
 
   /* ================================================================ ROUTER */
@@ -319,12 +375,13 @@
     try { App.views[key](view, parts.slice(1).map(decodeURIComponent)); }
     catch (e) { console.error(e); view.innerHTML = U.empty('Lỗi hiển thị: ' + e.message, 'bi-bug'); }
   }
+  App.applyBranding = function (s) { applyBranding(s); };
   App.go = function (path) { if (location.hash === '#/' + path) route(); else location.hash = '#/' + path; };
 
   /* ================================================================ BRANDING */
   function applyBranding(s) {
     s = s || {};
-    var logo = s.CLINIC_LOGO_URL;
+    var logo = s.CLINIC_LOGO_DATA || s.CLINIC_LOGO_URL;
     var name = s.CLINIC_NAME || 'PHÒNG XN Y KHOA';
     U.$$('[data-logo]').forEach(function (el) {
       el.innerHTML = logo ? '<img src="' + U.esc(logo) + '" alt="Logo">' : '<span>XN</span>';
@@ -333,6 +390,12 @@
     U.$$('[data-clinic-address]').forEach(function (el) { el.textContent = s.CLINIC_ADDRESS || ''; });
     U.$$('[data-app-version]').forEach(function (el) { el.textContent = s.APP_VERSION ? 'v' + s.APP_VERSION : ''; });
     document.title = 'LIS – ' + name;
+    // Màn đăng nhập: ảnh nền (LOGIN_BG_URL, trống = ảnh mặc định) + độ mờ lớp phủ (LOGIN_BG_DIM 0–0.8)
+    var bg = document.getElementById('login-bg'), dim = document.getElementById('login-dim');
+    if (bg) bg.style.backgroundImage = s.LOGIN_BG_URL ? 'url("' + String(s.LOGIN_BG_URL).replace(/["\\\n\r]/g, '') + '")' : '';
+    if (dim) { var d = Number(s.LOGIN_BG_DIM); dim.style.opacity = isFinite(d) && s.LOGIN_BG_DIM !== '' && s.LOGIN_BG_DIM !== undefined ? Math.min(0.8, Math.max(0, d)) : ''; }
+    var yr = document.getElementById('login-year');
+    if (yr) yr.textContent = new Date().getFullYear();
   }
 
   /* ================================================================ LOGIN / SESSION */
@@ -340,8 +403,12 @@
     App.state = null;
     document.getElementById('app-view').style.display = 'none';
     document.getElementById('login-view').style.display = '';
-    document.getElementById('demo-hint').classList.toggle('d-none', !Api.isDemo);
-    Api.call('sys.publicConfig').then(applyBranding).catch(function () { /* offline branding */ });
+    // Hiện ngay logo/tên đã lưu lần trước (không chờ máy chủ), rồi cập nhật bản mới nhất
+    try { var cached = JSON.parse(localStorage.getItem('lis_brand') || 'null'); if (cached) applyBranding(cached); } catch (e) { /* storage unavailable */ }
+    Api.call('sys.publicConfig').then(function (pc) {
+      applyBranding(pc);
+      try { localStorage.setItem('lis_brand', JSON.stringify(pc)); } catch (e) { /* quota / private mode */ }
+    }).catch(function () { /* offline branding */ });
   }
 
   function startApp(boot) {

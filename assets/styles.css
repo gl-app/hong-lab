@@ -40,19 +40,63 @@ body { font-family: var(--bs-body-font-family); -webkit-font-smoothing: antialia
 .form-label { font-weight: 500; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
 a { color: var(--brand); }
 
-/* ------------------------------------------------ Login */
-#login-view { min-height: 100vh; display: grid; grid-template-columns: 1.1fr 1fr; }
-.login-art { background: linear-gradient(160deg, var(--brand) 0%, #136f80 100%); color: #fff; padding: 56px; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
-.login-art::after { content: ""; position: absolute; right: -120px; bottom: -120px; width: 420px; height: 420px; border-radius: 50%; border: 60px solid rgba(255, 255, 255, .06); }
-.login-art h1 { font-weight: 700; font-size: 30px; line-height: 1.25; max-width: 440px; }
-.login-art p { opacity: .85; max-width: 420px; }
-.login-panel { display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
-.login-card { width: 100%; max-width: 380px; }
+/* ------------------------------------------------ Login (v1.5 – ảnh nền toàn màn hình + thẻ đăng nhập) */
+#login-view { position: relative; min-height: 100vh; display: flex; flex-direction: column; background: #0b3b48; overflow: hidden; }
+.login-bg { position: absolute; inset: 0; background: #0b3b48 url("login-bg.webp") center bottom / cover no-repeat; }
+.login-dim { position: absolute; inset: 0; background: rgb(11, 59, 72); opacity: .35; }
+.login-top { position: relative; z-index: 1; display: flex; align-items: center; padding: 22px 48px; }
+.login-brand { display: flex; align-items: center; gap: 12px; color: #fff; }
+.login-brand .brand-logo { width: 46px; height: 46px; border-radius: 12px; padding: 4px; box-shadow: 0 4px 14px rgba(6, 30, 38, .25); }
+.lb-name { font-weight: 700; font-size: 16px; letter-spacing: .02em; text-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+.lb-sub { font-size: 12px; opacity: .9; text-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+.login-center { position: relative; z-index: 1; flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px 16px 64px; }
+.login-card { width: 100%; max-width: 432px; background: #fff; border-radius: 16px; padding: 40px 40px 28px; display: flex; flex-direction: column; gap: 18px;
+  box-shadow: 0 24px 64px rgba(6, 30, 38, .35), 0 2px 6px rgba(6, 30, 38, .12); }
+.lc-head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; margin-bottom: 4px; }
+.lc-logo.brand-logo { width: 76px; height: 76px; border-radius: 18px; padding: 6px; border: 1px solid var(--border); box-shadow: var(--shadow); font-size: 20px; }
+.lc-head h1 { margin: 8px 0 0; font-size: 24px; font-weight: 700; color: var(--brand); }
+.lc-head p { margin: 0; font-size: 14px; color: var(--muted); }
+.lc-group { display: flex; flex-direction: column; gap: 6px; }
+.lc-label { font-size: 13px; font-weight: 600; color: #3e4c59; }
+.lc-field { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 6px 0 14px; border: 1px solid #cbd5dc; border-radius: 10px; background: #fff; transition: border-color .15s, box-shadow .15s; }
+.lc-field > i { color: var(--muted); font-size: 17px; }
+.lc-field input { flex: 1; min-width: 0; border: 0; outline: none; font: inherit; font-size: 15px; color: var(--text); background: transparent; height: 100%; }
+.lc-field:focus-within { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(15, 76, 92, .12); }
+.lc-eye { width: 40px; height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.lc-eye:hover { background: var(--brand-50); color: var(--brand); }
+.lc-submit { height: 50px; margin-top: 4px; border: 0; border-radius: 10px; background: var(--brand); color: #fff; font-size: 16px; font-weight: 600; box-shadow: 0 6px 16px rgba(15, 76, 92, .28); transition: background .15s; }
+.lc-submit:hover { background: var(--brand-600); }
+.lc-submit:disabled { opacity: .75; }
+.lc-foot { padding-top: 12px; border-top: 1px solid #e3e9ec; font-size: 12px; color: var(--muted); text-align: center; }
+.login-copy { position: absolute; left: 48px; bottom: 24px; z-index: 1; font-size: 12.5px; color: #fff; opacity: .92; text-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
 .brand-logo { width: 56px; height: 56px; border-radius: 14px; background: #fff; display: grid; place-items: center; overflow: hidden; color: var(--brand); font-weight: 800; }
 .brand-logo img { width: 100%; height: 100%; object-fit: contain; }
-.login-card .brand-logo { box-shadow: var(--shadow); border: 1px solid var(--border); }
 .demo-hint { background: var(--warn-50); border: 1px dashed #f2b47a; border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
-@media (max-width: 860px) { #login-view { grid-template-columns: 1fr; } .login-art { display: none; } }
+/* Màn hình laptop thấp: thu gọn thẻ để vừa 1 màn hình */
+@media (min-width: 641px) and (max-height: 760px) {
+  .login-top { padding: 14px 40px; }
+  .login-center { padding: 8px 16px 48px; }
+  .login-card { padding: 26px 36px 20px; gap: 14px; }
+  .lc-logo.brand-logo { width: 56px; height: 56px; border-radius: 14px; }
+  .lc-head h1 { margin-top: 4px; font-size: 21px; }
+}
+/* Điện thoại: ảnh thành băng trên cùng, thẻ đăng nhập trượt lên che một phần ảnh */
+@media (max-width: 640px) {
+  #login-view { display: block; background: #fff; }
+  .login-bg { bottom: auto; height: 300px; background-position: 22% 30%; }
+  .login-dim { display: none; }
+  .login-top { position: absolute; left: 16px; top: 16px; padding: 0; }
+  .login-brand { background: rgba(255, 255, 255, .94); padding: 6px 14px 6px 6px; border-radius: 999px; box-shadow: 0 4px 12px rgba(6, 30, 38, .18); color: var(--brand); }
+  .login-brand .brand-logo { width: 32px; height: 32px; border-radius: 50%; padding: 2px; box-shadow: none; font-size: 11px; }
+  .lb-name { font-size: 13px; text-shadow: none; } .lb-sub { display: none; }
+  .login-center { display: block; padding: 268px 0 0; }
+  .login-card { max-width: none; border-radius: 24px 24px 0 0; padding: 30px 22px 22px; box-shadow: none; min-height: calc(100vh - 268px); }
+  .lc-logo { display: none !important; }
+  .lc-head { align-items: flex-start; text-align: left; }
+  .lc-head h1 { margin: 0; color: #12233f; }
+  .lc-field { height: 50px; } .lc-field input { font-size: 16px; }
+  .login-copy { display: none; }
+}
 
 /* ------------------------------------------------ Shell */
 #app-view { display: none; min-height: 100vh; }
@@ -156,3 +200,4 @@ pre.audit-detail { white-space: pre-wrap; font-size: 11.5px; background: #f8fafb
 .list-group-item.active { background: var(--brand); border-color: var(--brand); }
 .table td.mono, .table .mono { white-space: nowrap; }
 @media (min-width: 1200px) { .pt-sticky { position: sticky; top: 72px; } }
+input.res-input.res-calc { background: #f3f7f8; border-style: dashed; font-weight: 600; }

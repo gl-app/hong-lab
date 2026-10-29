@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '1.2.0',
+  VERSION: '1.5.2',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -70,9 +70,9 @@ SCHEMA[T.ROLES]       = ['RoleCode', 'RoleName', 'Permissions', 'IsSystem'];
 SCHEMA[T.USERS]       = ['Username', 'FullName', 'RoleCode', 'PasswordHash', 'Salt', 'IsActive',
                          'MustChangePassword', 'LastLoginAt', 'CreatedAt', 'UpdatedAt'];
 SCHEMA[T.PANELS]      = ['PanelCode', 'PanelName', 'PrintTitle', 'PrintSubtitle', 'PricingMode', 'Price',
-                         'SortOrder', 'IsActive', 'TemplateDocId'];
+                         'SortOrder', 'IsActive', 'TemplateDocId', 'PageSize'];
 SCHEMA[T.TESTS]       = ['TestCode', 'TestName', 'Unit', 'ResultType', 'RefMinM', 'RefMaxM', 'RefMinF',
-                         'RefMaxF', 'RefText', 'Price', 'SortOrder', 'IsActive', 'LegacyName'];
+                         'RefMaxF', 'RefText', 'Price', 'SortOrder', 'IsActive', 'LegacyName', 'Formula'];
 SCHEMA[T.PANEL_TESTS] = ['PanelCode', 'TestCode', 'SortOrder'];
 SCHEMA[T.DOCTORS]     = ['DoctorName', 'IsActive', 'SortOrder'];
 SCHEMA[T.LOOKUPS]     = ['ListCode', 'Value', 'SortOrder'];
@@ -179,7 +179,7 @@ var SECURITY = {
 };
 
 /** Public settings exposed to FE before login (branding). */
-var PUBLIC_SETTING_KEYS = ['CLINIC_NAME', 'CLINIC_LOGO_URL', 'CLINIC_ADDRESS', 'CLINIC_PHONE'];
+var PUBLIC_SETTING_KEYS = ['CLINIC_NAME', 'CLINIC_LOGO_URL', 'CLINIC_LOGO_DATA', 'CLINIC_ADDRESS', 'CLINIC_PHONE', 'LOGIN_BG_URL', 'LOGIN_BG_DIM'];
 
 /* ---- 01_Router.gs ---- */
 /**
@@ -219,6 +219,7 @@ var ROUTES = {
 
   'user.options':          { fn: function () { return WorkService.userOptions(); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE + '|' + PERM.RESULT_ENTER },
   'work.list':             { fn: function (p, c) { return WorkService.list(p, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
+  'work.summary':          { fn: function (p, c) { return WorkService.summary(p, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
   'work.export':           { fn: function (p, c) { return WorkService.exportData(p, c); }, perm: PERM.WORK_EXPORT + '|' + PERM.ADMIN_USERS },
   'report.productivity':   { fn: function (p) { return WorkService.productivity(p); }, perm: PERM.REPORT_REVENUE + '|' + PERM.ADMIN_USERS },
 
@@ -240,6 +241,8 @@ var ROUTES = {
   'admin.roles.list':      { fn: function () { return AdminService.listRoles(); }, perm: PERM.ADMIN_USERS },
   'admin.roles.save':      { fn: function (p, c) { return AdminService.saveRole(p, c); }, perm: PERM.ADMIN_USERS },
   'admin.settings.get':    { fn: function () { return AdminService.getSettings(); }, perm: PERM.ADMIN_CONFIG },
+  'admin.logo.upload':     { fn: function (p, c) { return AdminService.uploadLogo(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.logo.remove':     { fn: function (p, c) { return AdminService.removeLogo(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.settings.save':   { fn: function (p, c) { return AdminService.saveSettings(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.list':      { fn: function () { return AdminService.listYearDbs(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.save':      { fn: function (p, c) { return AdminService.saveYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
@@ -1157,6 +1160,57 @@ var Auth = {
  * 05_Catalog_Audit.gs – Danh mục (nhóm XN, chỉ số, bác sĩ, lookup) + Nhật ký hệ thống.
  */
 
+/**
+ * Chỉ số tự tính (theo file gốc Mrs Hồng.xls – sheet Diary book):
+ *  - LDL-C (cột AT): Friedewald = Cholesterol − HDL − Triglycerid/2.2 (mmol/l), cần đủ 3 giá trị > 0.
+ *  - eGFR  (cột AX/AY): CKD-EPI 2021 từ Creatinin (µmol/l), giới, tuổi.
+ *      eGFR = 142 × min(Scr/κ,1)^α × max(Scr/κ,1)^−1.200 × 0.9938^Tuổi × (1.012 nếu Nữ)
+ *      Scr = Creatinin/88.4 (mg/dl); κ = 0.7 (Nữ) / 0.9 (Nam); α = −0.241 (Nữ) / −0.302 (Nam).
+ *      (File cũ ghi 0.742 ở vế MIN cho Nữ – đã thống nhất dùng κ = 0.7 theo chuẩn.)
+ *  Chọn chỉ số tự tính → bắt buộc chọn các chỉ số trung gian. Giá trị do server tính, không nhập tay.
+ */
+var CALC = {
+  LDL_FRIEDEWALD: {
+    deps: ['TG', 'CHOL', 'HDL'], decimals: 2, label: 'Cholesterol − HDL − Triglycerid/2.2',
+    fn: function (v) {
+      if (!(v.TG > 0 && v.CHOL > 0 && v.HDL > 0)) return null;
+      var r = v.CHOL - v.HDL - v.TG / 2.2;
+      return r > 0 ? r : null;
+    }
+  },
+  EGFR_CKD_EPI_2021: {
+    deps: ['CREA'], decimals: 0, needsAge: true, label: 'CKD-EPI 2021 (Creatinin, giới, tuổi)',
+    fn: function (v, c) {
+      if (!(v.CREA > 0) || !(c.age > 0)) return null;
+      var k = c.female ? 0.7 : 0.9, a = c.female ? -0.241 : -0.302;
+      var s = v.CREA / 88.4 / k;
+      return 142 * Math.pow(Math.min(s, 1), a) * Math.pow(Math.max(s, 1), -1.2) * Math.pow(0.9938, c.age) * (c.female ? 1.012 : 1);
+    }
+  }
+};
+var DEFAULT_FORMULA = { LDL: 'LDL_FRIEDEWALD', EGFR: 'EGFR_CKD_EPI_2021' };
+
+var Calc = {
+  formulaOf: function (testCode) {
+    var t = Catalog.testMap()[testCode];
+    var f = t ? t.Formula : DEFAULT_FORMULA[testCode];
+    return f && CALC[f] ? CALC[f] : null;
+  },
+  deps: function (testCode) { var f = Calc.formulaOf(testCode); return f ? f.deps.slice() : []; },
+  /** values: { TestCode: number|string } ; order: { Gender, Age } → string ('' nếu chưa đủ dữ liệu). */
+  compute: function (testCode, values, order) {
+    var f = Calc.formulaOf(testCode);
+    if (!f) return '';
+    var v = {};
+    f.deps.forEach(function (d) { v[d] = toNum_(values[d]); });
+    var female = /^n(ữ|u)$/i.test(String(order.Gender || '').trim());
+    var r = f.fn(v, { age: toNum_(order.Age), female: female });
+    if (r === null || !isFinite(r)) return '';
+    var m = Math.pow(10, f.decimals);
+    return String(Math.round(r * m) / m);
+  }
+};
+
 var Catalog = {
   get: function () {
     var c = CacheUtil.get(CACHE.CATALOG);
@@ -1167,7 +1221,8 @@ var Catalog = {
         PanelCode: String(r.PanelCode).trim(), PanelName: r.PanelName, PrintTitle: r.PrintTitle,
         PrintSubtitle: r.PrintSubtitle, PricingMode: String(r.PricingMode || 'TEST').toUpperCase(),
         Price: toNum_(r.Price, 0), SortOrder: toNum_(r.SortOrder, 999), IsActive: toBool_(r.IsActive),
-        TemplateDocId: r.TemplateDocId || ''
+        TemplateDocId: r.TemplateDocId || '',
+        PageSize: /^A[45]$/.test(String(r.PageSize || '').toUpperCase().trim()) ? String(r.PageSize).toUpperCase().trim() : ''   // '' = theo cấu hình chung
       };
     }).sort(function (a, b) { return a.SortOrder - b.SortOrder; });
     var tests = Db.readAll(T.TESTS).map(function (r) {
@@ -1176,7 +1231,8 @@ var Catalog = {
         ResultType: String(r.ResultType || 'TEXT').toUpperCase(),
         RefMinM: num(r.RefMinM), RefMaxM: num(r.RefMaxM), RefMinF: num(r.RefMinF), RefMaxF: num(r.RefMaxF),
         RefText: r.RefText, Price: toNum_(r.Price, 0), SortOrder: toNum_(r.SortOrder, 999),
-        IsActive: toBool_(r.IsActive), LegacyName: r.LegacyName || ''
+        IsActive: toBool_(r.IsActive), LegacyName: r.LegacyName || '',
+        Formula: r.Formula || DEFAULT_FORMULA[String(r.TestCode).trim()] || ''
       };
     });
     var panelTests = Db.readAll(T.PANEL_TESTS).map(function (r) {
@@ -1541,7 +1597,7 @@ var OrderService = {
 
       var resultRows = [];
       if (p.results && p.results.length && Auth.hasPerm(ctx, PERM.RESULT_ENTER)) {
-        resultRows = OrderService.buildResultRows_(order, OrderService.expandShared_(p.results, panelRows), ctx);
+        resultRows = OrderService.buildResultRows_(order, OrderService.expandShared_(OrderService.applyCalc_(order, panelRows, [], p.results), panelRows), ctx);
         var resulted = {};
         resultRows.forEach(function (r) { resulted[r.PanelCode] = true; });
         panelRows.forEach(function (pr) { if (resulted[pr.PanelCode]) pr.ResultStatus = ENUM.PANEL_STATUS.RESULTED; });
@@ -1673,9 +1729,8 @@ var OrderService = {
       allRes.forEach(function (r) { exMap[r.PanelCode + '|' + r.TestCode] = r; });
 
       // Mở rộng: kết quả nhập ở nhóm này + các nhóm khác của phiếu có cùng chỉ số
-      var incoming = OrderService.expandShared_((p.results || []).map(function (r) {
-        return { panelCode: p.panelCode, testCode: r.testCode, value: r.value };
-      }), panels, true);
+      var raw = (p.results || []).map(function (r) { return { panelCode: p.panelCode, testCode: r.testCode, value: r.value }; });
+      var incoming = OrderService.expandShared_(OrderService.applyCalc_(order, panels, allRes, raw), panels, true);
       var built = OrderService.buildResultRows_(order, incoming, ctx, true);
 
       var updates = [], inserts = [], deletes = [], changes = [];
@@ -1878,25 +1933,54 @@ var OrderService = {
   },
 
   /** Validate panels & compute line amounts. */
+  /**
+   * Kiểm tra nhóm + tính tiền từng dòng.
+   *  - Chọn chỉ số tự tính (LDL, eGFR) → tự thêm chỉ số trung gian (TG, CHOL, HDL / CREA).
+   *  - Chỉ số trùng giữa các nhóm chỉ tính tiền 1 lần: nhóm giá trọn gói (PANEL) đã bao gồm → nhóm tính theo chỉ số (TEST) không tính lại;
+   *    giữa các nhóm TEST: nhóm chọn trước tính, nhóm sau bỏ qua.
+   */
   buildLines_: function (panels, ctx, existing) {
-    var pm = Catalog.panelMap();
+    var pm = Catalog.panelMap(), tm = Catalog.testMap();
     var seen = {};
-    return panels.map(function (l) {
+    var lines = panels.map(function (l) {
       var code = String(l.panelCode || l.PanelCode || '').trim().toUpperCase();
       var panel = pm[code];
       if (!panel) throw new AppError('VALIDATION', 'Nhóm XN không tồn tại: ' + code);
       if (seen[code]) throw new AppError('VALIDATION', 'Nhóm XN bị trùng: ' + code);
       seen[code] = true;
-      var all = Catalog.testsOfPanel(code);
-      var allCodes = all.map(function (t) { return t.TestCode; });
-      var sel = (l.tests && l.tests.length) ? l.tests.filter(function (t) { return allCodes.indexOf(t) > -1; }) : allCodes;
-      var amount;
+      var allCodes = Catalog.testsOfPanel(code).map(function (t) { return t.TestCode; });
+      var sel = (l.tests && l.tests.length) ? l.tests.filter(function (t) { return allCodes.indexOf(t) > -1; }) : allCodes.slice();
+      return { PanelCode: code, panel: panel, allCodes: allCodes, TestCodes: sel, req: l };
+    });
+    // Chỉ số trung gian của chỉ số tự tính
+    lines.forEach(function (ln) {
+      ln.TestCodes.slice().forEach(function (tc) {
+        Calc.deps(tc).forEach(function (d) {
+          if (lines.some(function (x) { return x.TestCodes.indexOf(d) > -1; })) return;
+          if (ln.allCodes.indexOf(d) > -1) { ln.TestCodes.push(d); return; }
+          var other = lines.filter(function (x) { return x.allCodes.indexOf(d) > -1; })[0];
+          if (other) { other.TestCodes.push(d); return; }
+          throw new AppError('VALIDATION', (tm[tc] || {}).TestName + ' cần chỉ số ' + ((tm[d] || {}).TestName || d) + ' nhưng phiếu không có nhóm chứa chỉ số này.');
+        });
+      });
+    });
+    lines.forEach(function (ln) { ln.TestCodes = ln.allCodes.filter(function (c) { return ln.TestCodes.indexOf(c) > -1; }); });
+    // Tính tiền – chỉ số trùng chỉ tính 1 lần
+    var covered = {}, charged = {};
+    lines.forEach(function (ln) { if (ln.panel.PricingMode === ENUM.PRICING.PANEL) ln.TestCodes.forEach(function (c) { covered[c] = ln.PanelCode; }); });
+    return lines.map(function (ln) {
+      var code = ln.PanelCode, panel = ln.panel, l = ln.req, amount;
       if (panel.PricingMode === ENUM.PRICING.PANEL) {
         amount = panel.Price;
       } else {
-        var tm = Catalog.testMap();
-        amount = sel.reduce(function (s, c) { return s + (tm[c] ? Number(tm[c].Price || 0) : 0); }, 0);
-        if (!amount) amount = panel.Price;     // fallback to panel price if tests are unpriced
+        var unpriced = ln.TestCodes.every(function (c) { return !(tm[c] && Number(tm[c].Price)); });
+        amount = 0;
+        ln.TestCodes.forEach(function (c) {
+          if (covered[c] || charged[c]) return;
+          charged[c] = code;
+          amount += tm[c] ? Number(tm[c].Price || 0) : 0;
+        });
+        if (unpriced) amount = panel.Price;     // nhóm chưa có giá từng chỉ số → dùng giá nhóm
       }
       if (l.amount !== undefined && l.amount !== null && l.amount !== '' && Number(l.amount) !== Number(amount)) {
         Auth.assertPerm(ctx, PERM.PRICE_OVERRIDE);
@@ -1905,8 +1989,30 @@ var OrderService = {
         var ex = existing.filter(function (e) { return e.PanelCode === code; })[0];
         if (ex) amount = toNum_(ex.Amount, amount);   // keep agreed price when not re-specified
       }
-      return { PanelCode: code, TestCodes: sel, Amount: amount };
+      return { PanelCode: code, TestCodes: ln.TestCodes, Amount: amount };
     });
+  },
+
+  /**
+   * Thêm kết quả chỉ số tự tính vào danh sách nhập (server là nguồn duy nhất – bỏ giá trị tự tính do client gửi).
+   * existingRows: Results hiện có của phiếu; incoming: [{panelCode, testCode, value}]; panelRows: OrderPanels.
+   */
+  applyCalc_: function (order, panelRows, existingRows, incoming) {
+    var vals = {};
+    existingRows.forEach(function (r) { if (r.Value !== '') vals[r.TestCode] = r.Value; });
+    var input = incoming.filter(function (r) { return !Calc.formulaOf(r.testCode); });
+    input.forEach(function (r) { vals[r.testCode] = r.value === null || r.value === undefined ? '' : String(r.value).trim(); });
+    var out = input.slice();
+    panelRows.forEach(function (pr) {
+      var codes = pr.TestCodes ? String(pr.TestCodes).split(',').filter(String) : Catalog.testsOfPanel(pr.PanelCode).map(function (t) { return t.TestCode; });
+      codes.forEach(function (tc) {
+        if (!Calc.formulaOf(tc)) return;
+        var exist = existingRows.filter(function (r) { return r.PanelCode === pr.PanelCode && r.TestCode === tc; })[0];
+        var v = Calc.compute(tc, vals, order);
+        if (v !== '' || exist) out.push({ panelCode: pr.PanelCode, testCode: tc, value: v });
+      });
+    });
+    return out;
   },
 
   money_: function (lines, discount, ctx, skipPermCheck) {
@@ -2202,16 +2308,23 @@ var PrintService = {
     var docId = doc.getId();
     try {
       var body = doc.getBody();
-      var size = PrintService.PAGE[String(settings.PRINT_PAGE_SIZE || 'A5').toUpperCase()] || PrintService.PAGE.A5;
+      // Khổ giấy: theo từng nhóm (Panels.PageSize), trống = cấu hình chung. 1 file Google Docs chỉ có 1 khổ →
+      // nếu in chung nhiều nhóm khác khổ thì dùng A4 (khổ lớn hơn) cho cả file.
+      var defSize = String(settings.PRINT_PAGE_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5';
+      var sizeKey = panels.some(function (op) { return ((pm[op.PanelCode] || {}).PageSize || defSize) === 'A4'; }) ? 'A4' : 'A5';
+      var size = PrintService.PAGE[sizeKey];
       body.setPageWidth(size[0]).setPageHeight(size[1])
           .setMarginTop(24).setMarginBottom(20).setMarginLeft(28).setMarginRight(24);
-      var logo = PrintService.logoBlob_(settings.CLINIC_LOGO_URL);
+      var logo = PrintService.imageBlob_(settings.CLINIC_LOGO_FILE_ID) || PrintService.logoBlob_(settings.CLINIC_LOGO_URL);
+      var watermark = String(settings.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? PrintService.imageBlob_(settings.CLINIC_WATERMARK_FILE_ID) : null;
 
       panels.forEach(function (op, idx) {
         if (idx > 0) body.appendPageBreak();
         var panel = pm[op.PanelCode] || { PanelCode: op.PanelCode, PanelName: op.PanelCode, PrintTitle: 'PHIẾU KẾT QUẢ XÉT NGHIỆM' };
-        if (panel.TemplateDocId) PrintService.appendTemplate_(body, panel.TemplateDocId);
-        else PrintService.appendStandard_(body, data, op, panel, settings, logo, size);
+        var startIdx = body.getNumChildren();
+        var anchor = panel.TemplateDocId ? (PrintService.appendTemplate_(body, panel.TemplateDocId), PrintService.firstParagraphFrom_(body, startIdx))
+                                         : PrintService.appendStandard_(body, data, op, panel, settings, logo, size);
+        if (watermark && anchor) PrintService.addWatermark_(anchor, watermark, size);
       });
       PrintService.replacePlaceholders_(body, data, settings);
       // Remove the default empty first paragraph created by DocumentApp.create
@@ -2248,54 +2361,70 @@ var PrintService = {
     var C = PrintService.COLOR;
     var o = data.order;
     var contentW = size[0] - 52;
+    var A4 = size[0] > 500;
+    // Mật độ: gói nhiều chỉ số → thu nhỏ chữ/đệm để chữ ký + tên Trưởng phòng luôn nằm cùng trang 1
+    var nRows = PrintService.countRows_(data, op, settings);
+    var fitRows = A4 ? 22 : 9;
+    var d = nRows <= fitRows ? 1 : Math.max(0.74, 1 - (nRows - fitRows) * (A4 ? 0.015 : 0.035));
+    var fs = function (n) { return Math.max(6, Math.round((A4 ? n + 1 : n) * d * 2) / 2); };   // cỡ chữ theo khổ giấy × mật độ
+    var pd = function (n) { return Math.max(1, Math.round(n * d * 2) / 2); };
 
-    // ---- Header: logo | clinic info
+    // ---- Header: logo | tên phòng XN, giấy phép · địa chỉ, điện thoại
     var head = body.appendTable([['', '']]);
     head.setBorderWidth(0);
     var hl = head.getCell(0, 0), hr = head.getCell(0, 1);
-    hl.setWidth(70).setPaddingTop(0).setPaddingLeft(0);
-    hr.setWidth(contentW - 70).setPaddingTop(0);
+    hl.setWidth(62).setPaddingTop(0).setPaddingLeft(0).setPaddingBottom(4);
+    hr.setWidth(contentW - 62).setPaddingTop(2).setPaddingBottom(4);
     if (logo) {
       try {
         var img = hl.getChild(0).asParagraph().appendInlineImage(logo);
         var ratio = img.getHeight() / img.getWidth();
-        img.setWidth(60).setHeight(Math.round(60 * ratio));
+        var h = 44, w = Math.round(h / ratio);
+        if (w > 58) { w = 58; h = Math.round(58 * ratio); }
+        img.setWidth(w).setHeight(h);
       } catch (e) { /* bad image → skip */ }
     }
-    PrintService.para_(hr.getChild(0).asParagraph(), settings.CLINIC_NAME || 'PHÒNG XÉT NGHIỆM', 12, true, C.primary);
-    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_LICENSE || '', 8, false, C.muted);
-    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_ADDRESS || '', 8, false, C.muted);
-    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_PHONE ? 'ĐT: ' + settings.CLINIC_PHONE : '', 8, false, C.muted);
+    PrintService.para_(hr.getChild(0).asParagraph(), settings.CLINIC_NAME || 'PHÒNG XÉT NGHIỆM', fs(13), true, C.primary);
+    PrintService.para_(hr.appendParagraph(''), [settings.CLINIC_LICENSE, settings.CLINIC_ADDRESS].filter(String).join(' · '), fs(7.5), false, C.muted);
+    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_PHONE ? 'Điện thoại: ' + settings.CLINIC_PHONE : '', fs(7.5), false, C.muted);
+    // đường kẻ dưới header
+    var rule = body.appendTable([['']]);
+    rule.setBorderWidth(0);
+    rule.getCell(0, 0).setBackgroundColor(C.primary).setPaddingTop(0).setPaddingBottom(0).setWidth(contentW);
+    PrintService.styleText_(rule.getCell(0, 0).getChild(0).asParagraph(), 1, false, C.primary).setLineSpacing(0.1);
 
-    // ---- Title
-    var t1 = PrintService.para_(body.appendParagraph(''), panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM', 13, true, C.primary);
-    t1.setAlignment(DocumentApp.HorizontalAlignment.CENTER).setSpacingBefore(6);
+    // ---- Tiêu đề
+    var t1 = PrintService.para_(body.appendParagraph(''), panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM', fs(14), true, C.primary);
+    t1.setAlignment(DocumentApp.HorizontalAlignment.CENTER).setSpacingBefore(pd(8));
     if (panel.PrintSubtitle) {
-      PrintService.para_(body.appendParagraph(''), panel.PrintSubtitle, 11, true, C.primary)
+      PrintService.para_(body.appendParagraph(''), panel.PrintSubtitle, fs(11.5), true, C.primary)
         .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
     }
-    PrintService.para_(body.appendParagraph(''), 'Mã phiếu: ' + o.OrderID + '   ·   Mã BN: ' + o.PatientID, 8, false, C.muted)
-      .setAlignment(DocumentApp.HorizontalAlignment.CENTER).setSpacingAfter(4);
+    PrintService.para_(body.appendParagraph(''), ' ', 3, false, C.muted);
 
-    // ---- Patient info
+    // ---- Thông tin bệnh nhân (khung nền nhạt)
     var info = body.appendTable([
-      ['Họ và tên: ' + o.PatientName, 'Tuổi: ' + (o.Age === null ? '' : o.Age), 'Giới tính: ' + (o.Gender || '')],
-      ['Địa chỉ: ' + (o.Address || ''), '', ''],
-      ['Bác sĩ chỉ định: ' + (o.DoctorName || ''), '', '']
+      ['Họ và tên: ' + o.PatientName, 'Tuổi: ' + (o.Age === null ? '' : o.Age) + '      Giới tính: ' + (o.Gender || '')],
+      ['Mã BN: ' + o.PatientID, 'Ngày khám: ' + PrintService.vnDate_(o.OrderDate)],
+      ['Địa chỉ: ' + (o.Address || ''), 'BS chỉ định: ' + (o.DoctorName || '')]
     ]);
-    info.setBorderWidth(0);
-    for (var r = 0; r < info.getNumRows(); r++) {
-      for (var c = 0; c < 3; c++) {
+    info.setBorderColor('#D5E2E5').setBorderWidth(0.5);
+    for (var r = 0; r < 3; r++) {
+      for (var c = 0; c < 2; c++) {
         var cell = info.getCell(r, c);
-        cell.setPaddingTop(1).setPaddingBottom(1).setPaddingLeft(0);
-        PrintService.styleText_(cell.getChild(0).asParagraph(), 10, c === 0 && r === 0, C.text);
+        cell.setBackgroundColor('#F4F8F9').setPaddingTop(pd(2.5)).setPaddingBottom(pd(2.5)).setPaddingLeft(6).setPaddingRight(6);
+        var pg = PrintService.styleText_(cell.getChild(0).asParagraph(), fs(9.5), false, C.text);
+        // in đậm phần giá trị sau dấu ':'
+        var txt = pg.editAsText(), str = txt.getText(), k = str.indexOf(':');
+        if (k > -1 && k + 1 < str.length && !(r === 2)) txt.setBold(k + 1, str.length - 1, true);
+        if (r === 0 && c === 0 && k > -1 && k + 1 < str.length) txt.setFontSize(k + 1, str.length - 1, fs(10.5));
       }
     }
-    info.getCell(0, 0).setWidth(contentW * 0.58);
-    info.getCell(0, 1).setWidth(contentW * 0.17);
-    info.getCell(0, 2).setWidth(contentW * 0.25);
+    info.getCell(0, 0).setWidth(contentW * 0.6);
+    info.getCell(0, 1).setWidth(contentW * 0.4);
+    PrintService.para_(body.appendParagraph(''), ' ', 4, false, C.muted);
 
-    // ---- Results
+    // ---- Bảng kết quả
     var testsAll = Catalog.testsOfPanel(op.PanelCode);
     var selected = op.TestCodes && op.TestCodes.length ? op.TestCodes : testsAll.map(function (t) { return t.TestCode; });
     var resMap = {};
@@ -2305,55 +2434,84 @@ var PrintService = {
       return selected.indexOf(t.TestCode) > -1 && (!onlyResulted || (resMap[t.TestCode] && resMap[t.TestCode].Value !== ''));
     });
 
+    var anyAbn = false;
     var grid = [['STT', 'XÉT NGHIỆM', 'KẾT QUẢ', 'ĐƠN VỊ', 'KHOẢNG THAM CHIẾU']];
     rows.forEach(function (t, i) {
       var rs = resMap[t.TestCode] || {};
       var mark = rs.Flag === 'H' ? ' ↑' : (rs.Flag === 'L' ? ' ↓' : '');
       grid.push([String(i + 1), t.TestName, (rs.Value || '') + mark, t.Unit || '', rs.RefText || Catalog.refFor(t, o.Gender).text || '']);
     });
+    if (!rows.length) grid.push(['', '(Chưa có kết quả)', '', '', '']);
     var tbl = body.appendTable(grid);
-    tbl.setBorderColor(C.border).setBorderWidth(0.5);
-    var widths = [0.07, 0.36, 0.2, 0.13, 0.24];
+    tbl.setBorderColor('#C3CED4').setBorderWidth(0.5);
+    var widths = [0.07, 0.37, 0.17, 0.13, 0.26];
     for (var i = 0; i < grid.length; i++) {
       var row = tbl.getRow(i);
       var isHead = i === 0;
-      var flag = isHead ? '' : ((resMap[rows[i - 1].TestCode] || {}).Flag || '');
+      var flag = (isHead || !rows.length) ? '' : ((resMap[rows[i - 1].TestCode] || {}).Flag || '');
       var abnormal = flag && flag !== 'N';
-      for (var k = 0; k < 5; k++) {
-        var ce = row.getCell(k);
-        if (i === 0) ce.setWidth(contentW * widths[k]);
-        ce.setPaddingTop(2).setPaddingBottom(2).setPaddingLeft(3).setPaddingRight(3);
-        if (isHead) ce.setBackgroundColor('#E6F0F2');
-        var pg = ce.getChild(0).asParagraph();
-        PrintService.styleText_(pg, isHead ? 8.5 : 9.5, isHead || (k === 2 && abnormal), isHead ? C.primary : (k === 2 && abnormal ? C.high : C.text));
-        if (k === 0 || k === 2 || k === 3) pg.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+      if (abnormal) anyAbn = true;
+      for (var k2 = 0; k2 < 5; k2++) {
+        var ce = row.getCell(k2);
+        if (i === 0) ce.setWidth(contentW * widths[k2]);
+        ce.setPaddingTop(pd(isHead ? 4 : 3)).setPaddingBottom(pd(isHead ? 4 : 3)).setPaddingLeft(4).setPaddingRight(4);
+        if (isHead) ce.setBackgroundColor(C.primary);
+        else if (i % 2 === 0) ce.setBackgroundColor('#F7FAFB');
+        var pg2 = ce.getChild(0).asParagraph();
+        var color = isHead ? '#FFFFFF' : (k2 === 2 && abnormal ? C.high : ((k2 === 0 || k2 === 3) ? C.muted : C.text));
+        PrintService.styleText_(pg2, isHead ? fs(8) : (k2 === 4 ? fs(8.5) : fs(9.5)), isHead || k2 === 1 || k2 === 2, color);
+        if (k2 === 0 || k2 === 2 || k2 === 3) pg2.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
       }
     }
-    if (!rows.length) PrintService.para_(body.appendParagraph(''), '(Chưa có kết quả)', 9, false, C.muted);
+    if (anyAbn) {
+      var lg = PrintService.para_(body.appendParagraph(''), 'In đậm đỏ: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)', fs(7.5), false, C.muted);
+      lg.setSpacingBefore(3);
+      lg.editAsText().setForegroundColor(0, 9, C.high).setBold(0, 9, true);
+    }
 
-    // ---- Footer: dates + signature
+    // ---- Chân phiếu: hẹn tái khám | địa danh, ngày – Trưởng phòng XN – ký tên
     var od = parseDate_(o.OrderDate);
     var city = settings.CLINIC_CITY || 'Pleiku';
     var foot = body.appendTable([
-      ['Ngày khám: ' + PrintService.vnDate_(o.OrderDate), city + ', ngày ' + od.getDate() + ' tháng ' + (od.getMonth() + 1) + ' năm ' + od.getFullYear()],
-      ['Ngày tái khám: ' + (o.FollowUpDate ? PrintService.vnDate_(o.FollowUpDate) : ''), 'TP. XÉT NGHIỆM'],
+      [o.FollowUpDate ? 'Hẹn tái khám: ' + PrintService.vnDate_(o.FollowUpDate) : '', city + ', ngày ' + od.getDate() + ' tháng ' + (od.getMonth() + 1) + ' năm ' + od.getFullYear()],
+      ['', 'TRƯỞNG PHÒNG XÉT NGHIỆM'],
       ['', ''],
       ['', settings.LAB_HEAD || '']
     ]);
     foot.setBorderWidth(0);
     for (var fr = 0; fr < foot.getNumRows(); fr++) {
-      foot.getCell(fr, 0).setWidth(contentW * 0.5).setPaddingLeft(0);
-      foot.getCell(fr, 1).setWidth(contentW * 0.5);
-      PrintService.styleText_(foot.getCell(fr, 0).getChild(0).asParagraph(), 9.5, false, C.text);
+      foot.getCell(fr, 0).setWidth(contentW * 0.4).setPaddingLeft(0).setPaddingTop(fr === 0 ? pd(10) : 0).setPaddingBottom(0);
+      foot.getCell(fr, 1).setWidth(contentW * 0.6).setPaddingTop(fr === 0 ? pd(10) : 0).setPaddingBottom(0);
+      var lp = PrintService.styleText_(foot.getCell(fr, 0).getChild(0).asParagraph(), fs(9.5), false, C.text);
+      if (fr === 0 && o.FollowUpDate) lp.editAsText().setBold(14, lp.getText().length - 1, true);
       var rp = foot.getCell(fr, 1).getChild(0).asParagraph();
-      PrintService.styleText_(rp, fr === 0 ? 9 : 10, fr === 1 || fr === 3, fr === 0 ? C.muted : C.text);
+      PrintService.styleText_(rp, fr === 0 ? fs(9) : fs(10), fr === 1 || fr === 3, fr === 0 ? C.muted : C.text);
       rp.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
     }
-    foot.getCell(2, 1).getChild(0).asParagraph().setSpacingBefore(18);
+    foot.getCell(2, 1).getChild(0).asParagraph().setSpacingBefore(Math.max(20, (A4 ? 36 : 26) * d));
 
-    var note = Utilities.formatDate(new Date(), APP.TZ, 'HH:mm:ss dd/MM/yyyy') + '  ' + (settings.REPORT_FOOTER || '');
-    var np = PrintService.para_(body.appendParagraph(''), note, 7, false, C.muted).setSpacingBefore(4);
+    var note = (settings.REPORT_FOOTER || '') + '   ·   In lúc ' + Utilities.formatDate(new Date(), APP.TZ, 'HH:mm dd/MM/yyyy');
+    var np = PrintService.para_(body.appendParagraph(''), note, fs(6.5), false, C.muted).setSpacingBefore(pd(8));
     np.editAsText().setItalic(true);
+    return t1;   // đoạn tiêu đề – neo watermark
+  },
+
+  /** Số dòng chỉ số sẽ in của 1 panel (cùng quy tắc lọc với bảng kết quả). */
+  countRows_: function (data, op, settings) {
+    var testsAll = Catalog.testsOfPanel(op.PanelCode);
+    var selected = op.TestCodes && op.TestCodes.length ? op.TestCodes : testsAll.map(function (t) { return t.TestCode; });
+    var resMap = {};
+    data.results.filter(function (x) { return x.PanelCode === op.PanelCode; }).forEach(function (x) { resMap[x.TestCode] = x; });
+    var onlyResulted = settings.PRINT_ONLY_RESULTED === '' || settings.PRINT_ONLY_RESULTED === undefined ? true : toBool_(settings.PRINT_ONLY_RESULTED);
+    var n = 0, longRef = 0;
+    testsAll.forEach(function (t) {
+      if (selected.indexOf(t.TestCode) < 0) return;
+      var r = resMap[t.TestCode];
+      if (onlyResulted && !(r && r.Value !== '')) return;
+      n++;
+      if (String((r && r.RefText) || Catalog.refFor(t, data.order.Gender).text || '').length > 16) longRef++;   // khoảng tham chiếu dài → xuống 2 dòng
+    });
+    return n + Math.ceil(longRef / 2);
   },
 
   /* ---------------------------------------------------------------- CUSTOM TEMPLATE */
@@ -2411,6 +2569,32 @@ var PrintService = {
   vnDate_: function (s) {
     var d = toDateStr_(s);
     return d ? d.substring(8, 10) + '/' + d.substring(5, 7) + '/' + d.substring(0, 4) : '';
+  },
+
+  imageBlob_: function (fileId) {
+    if (!fileId) return null;
+    try { return DriveApp.getFileById(fileId).getBlob(); } catch (e) { return null; }
+  },
+
+  /**
+   * Watermark: logo đã làm mờ (PNG trong suốt) đặt giữa trang, nổi trên chữ nhưng đủ nhạt để chữ vẫn đọc rõ
+   * (DocumentApp không hỗ trợ ảnh nằm dưới chữ). Gắn vào đoạn tiêu đề của mỗi nhóm → mỗi trang 1 watermark.
+   */
+  firstParagraphFrom_: function (body, idx) {
+    for (var i = idx; i < body.getNumChildren(); i++) {
+      if (body.getChild(i).getType() === DocumentApp.ElementType.PARAGRAPH) return body.getChild(i).asParagraph();
+    }
+    return null;
+  },
+
+  addWatermark_: function (anchor, blob, size) {
+    try {
+      var img = anchor.addPositionedImage(blob);
+      var w = (size[0] - 52) * 0.62, ratio = img.getHeight() / img.getWidth();
+      img.setWidth(Math.round(w)).setHeight(Math.round(w * ratio))
+         .setLeftOffset(Math.round((size[0] - 52 - w) / 2)).setTopOffset(Math.round(size[1] * 0.12))
+         .setLayout(DocumentApp.PositionedLayout.ABOVE_TEXT);
+    } catch (e) { console.warn('Watermark: ' + e.message); }
   },
 
   logoBlob_: function (url) {
@@ -2562,6 +2746,7 @@ var AdminService = {
       if (cur) Db.updateRow(T.ROLES, null, cur._row, row);
       else { row.IsSystem = false; Db.insert(T.ROLES, null, [row]); }
       Roles.invalidate();
+      CacheUtil.remove(WorkService.USERS_KEY);
       SysLog.write(ctx.username, cur ? 'ROLE_UPDATE' : 'ROLE_CREATE', 'Role', code, { permissions: perms });
       return AdminService.listRoles();
     });
@@ -2574,8 +2759,12 @@ var AdminService = {
 
   /** p: { items: [{Key, Value}] } */
   saveSettings: function (p, ctx) {
+    return withLock_(function () { return AdminService.saveSettingsNoLock_(p, ctx); });
+  },
+
+  saveSettingsNoLock_: function (p, ctx) {
     var items = p.items || [];
-    return withLock_(function () {
+    return (function () {
       var rows = Db.readAll(T.SETTINGS);
       var byKey = {};
       rows.forEach(function (r) { byKey[r.Key] = r; });
@@ -2591,9 +2780,66 @@ var AdminService = {
       Db.updateRows(T.SETTINGS, null, updates);
       if (inserts.length) Db.insert(T.SETTINGS, null, inserts);
       Settings.invalidate();
+      Object.keys(changed).forEach(function (k) { if (/_DATA$/.test(k)) changed[k] = { from: '(ảnh)', to: '(ảnh)' }; });
       SysLog.write(ctx.username, 'SETTINGS_UPDATE', 'Settings', '', changed);
       return AdminService.getSettings();
+    })();
+  },
+
+  /* ------------------------------------------------------------- LOGO & WATERMARK */
+  /**
+   * p: { logo: dataURL (PNG chất lượng cao, in phiếu), thumb: dataURL (≤ 45k ký tự, hiển thị web),
+   *      watermark: dataURL (PNG đã làm mờ theo độ trong suốt), opacity: 0.03–0.3, enabled: bool }
+   * Ảnh lớn lưu file Google Drive (thư mục LIS_Assets cạnh Sheet CONFIG); bản thu nhỏ lưu Settings để web hiển thị.
+   */
+  uploadLogo: function (p, ctx) {
+    required_(p, ['logo', 'thumb']);
+    if (String(p.thumb).length > 45000) throw new AppError('VALIDATION', 'Ảnh thu nhỏ quá lớn, hãy dùng logo đơn giản hơn.');
+    var toBlob = function (dataUrl, name) {
+      var m = String(dataUrl).match(/^data:(image\/(png|jpeg|webp));base64,(.+)$/);
+      if (!m) throw new AppError('VALIDATION', 'Ảnh không hợp lệ (chỉ PNG/JPG).');
+      return Utilities.newBlob(Utilities.base64Decode(m[3]), m[1], name);
+    };
+    return withLock_(function () {
+      var folder = AdminService.assetFolder_();
+      var old = Settings.all();
+      [old.CLINIC_LOGO_FILE_ID, old.CLINIC_WATERMARK_FILE_ID].forEach(function (id) {
+        if (id) try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { /* đã xóa */ }
+      });
+      var logoId = folder.createFile(toBlob(p.logo, 'clinic_logo.png')).getId();
+      var wmId = p.watermark ? folder.createFile(toBlob(p.watermark, 'clinic_watermark.png')).getId() : '';
+      var op = Math.min(0.3, Math.max(0.03, toNum_(p.opacity, 0.08)));
+      AdminService.saveSettingsNoLock_({ items: [
+        { Key: 'CLINIC_LOGO_DATA', Value: p.thumb, Description: 'Logo thu nhỏ (tự sinh khi tải logo – không sửa tay)' },
+        { Key: 'CLINIC_LOGO_FILE_ID', Value: logoId, Description: 'ID file logo trên Drive (in phiếu PDF/Word)' },
+        { Key: 'CLINIC_WATERMARK_FILE_ID', Value: wmId, Description: 'ID file watermark trên Drive' },
+        { Key: 'WATERMARK_ENABLED', Value: p.enabled === false ? 'FALSE' : 'TRUE', Description: 'TRUE = in logo mờ (watermark) giữa phiếu kết quả' },
+        { Key: 'WATERMARK_OPACITY', Value: String(op), Description: 'Độ đậm watermark (0.03 – 0.3)' }
+      ] }, ctx);
+      SysLog.write(ctx.username, 'LOGO_UPLOAD', 'Settings', 'logo', { logoId: logoId, watermarkId: wmId, opacity: op });
+      return Settings.all();
     });
+  },
+
+  removeLogo: function (p, ctx) {
+    return withLock_(function () {
+      var old = Settings.all();
+      [old.CLINIC_LOGO_FILE_ID, old.CLINIC_WATERMARK_FILE_ID].forEach(function (id) {
+        if (id) try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { /* đã xóa */ }
+      });
+      AdminService.saveSettingsNoLock_({ items: [{ Key: 'CLINIC_LOGO_DATA', Value: '' }, { Key: 'CLINIC_LOGO_FILE_ID', Value: '' }, { Key: 'CLINIC_WATERMARK_FILE_ID', Value: '' }] }, ctx);
+      SysLog.write(ctx.username, 'LOGO_REMOVE', 'Settings', 'logo', {});
+      return Settings.all();
+    });
+  },
+
+  assetFolder_: function () {
+    var name = 'LIS_Assets';
+    var cfg = DriveApp.getFileById(PropertiesService.getScriptProperties().getProperty(PROP.CONFIG_DB_ID));
+    var parents = cfg.getParents();
+    var parent = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+    var it = parent.getFoldersByName(name);
+    return it.hasNext() ? it.next() : parent.createFolder(name);
   },
 
   /* ------------------------------------------------------------- YEAR DATABASES */
@@ -2724,7 +2970,8 @@ var AdminService = {
         PanelCode: code, PanelName: String(panel.PanelName).trim(), PrintTitle: panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM',
         PrintSubtitle: panel.PrintSubtitle || '', PricingMode: String(panel.PricingMode || 'TEST').toUpperCase() === 'PANEL' ? 'PANEL' : 'TEST',
         Price: toNum_(panel.Price, 0), SortOrder: toNum_(panel.SortOrder, 999),
-        IsActive: panel.IsActive === undefined ? true : toBool_(panel.IsActive), TemplateDocId: panel.TemplateDocId || ''
+        IsActive: panel.IsActive === undefined ? true : toBool_(panel.IsActive), TemplateDocId: panel.TemplateDocId || '',
+        PageSize: /^A[45]$/.test(String(panel.PageSize || '').toUpperCase()) ? String(panel.PageSize).toUpperCase() : ''
       };
       if (cur) Db.updateRow(T.PANELS, null, cur._row, row); else Db.insert(T.PANELS, null, [row]);
       if (p.tests) {
@@ -2771,13 +3018,16 @@ var AdminService = {
 var WorkService = {
   USERS_KEY: 'user_opts_v1',
 
-  /** Danh sách nhân viên đang hoạt động (cho ô chọn người phụ trách). */
+  /**
+   * Danh sách nhân viên được phép phụ trách phiếu: tài khoản đang hoạt động,
+   * KHÔNG gồm vai trò Quản trị hệ thống (toàn quyền '*').
+   */
   userOptions: function () {
     var c = CacheUtil.get(WorkService.USERS_KEY);
     if (c) return c;
-    var roles = {};
-    Roles.all().forEach(function (r) { roles[r.RoleCode] = r.RoleName; });
-    var list = Db.readAll(T.USERS).filter(function (u) { return toBool_(u.IsActive); }).map(function (u) {
+    var roles = {}, sysAdmin = {};
+    Roles.all().forEach(function (r) { roles[r.RoleCode] = r.RoleName; if (r.Permissions.indexOf('*') > -1) sysAdmin[r.RoleCode] = true; });
+    var list = Db.readAll(T.USERS).filter(function (u) { return toBool_(u.IsActive) && !sysAdmin[u.RoleCode]; }).map(function (u) {
       return { Username: String(u.Username), FullName: u.FullName, RoleCode: u.RoleCode, RoleName: roles[u.RoleCode] || u.RoleCode };
     }).sort(function (a, b) { return String(a.FullName).localeCompare(String(b.FullName), 'vi'); });
     CacheUtil.put(WorkService.USERS_KEY, list, CACHE.TTL_LONG);
@@ -2792,7 +3042,7 @@ var WorkService = {
     WorkService.userOptions().forEach(function (u) { valid[u.Username] = true; });
     var out = [];
     arr.map(function (x) { return String(x).trim().toLowerCase(); }).filter(String).forEach(function (u) {
-      if (!valid[u]) throw new AppError('VALIDATION', 'Nhân viên không tồn tại hoặc đã khóa: ' + u);
+      if (!valid[u]) throw new AppError('VALIDATION', 'Không thể giao phiếu cho tài khoản "' + u + '" (không tồn tại, đã khóa hoặc là Quản trị hệ thống).');
       if (out.indexOf(u) === -1) out.push(u);
     });
     return out;
@@ -2895,6 +3145,45 @@ var WorkService = {
              rows: rows, results: results };
   },
 
+  /**
+   * Thống kê nhanh công việc (không có tiền) – cùng phạm vi với "Việc của tôi".
+   * p: { from, to, username? (Admin) }
+   */
+  summary: function (p, ctx) {
+    var c = WorkService.collect_(Object.assign({}, p, { status: 'ALL' }), ctx);
+    var nowTs = Date.now();
+    var s = { total: 0, completed: 0, pending: 0, pendingOver24h: 0, today: 0, todayCompleted: 0 };
+    var tats = [], byDay = {}, byPanel = {};
+    var today = todayStr_();
+    c.rows.forEach(function (o) {
+      var d = toDateStr_(o.OrderDate);
+      var done = o.Status === ENUM.ORDER_STATUS.COMPLETED;
+      s.total++;
+      if (done) s.completed++; else {
+        s.pending++;
+        var ct = WorkService.ts_(o.CreatedAt);
+        if (ct && nowTs - ct > 86400000) s.pendingOver24h++;
+      }
+      if (d === today) { s.today++; if (done) s.todayCompleted++; }
+      var t = WorkService.tatHours_(o);
+      if (t !== null) tats.push(t);
+      var day = byDay[d] = byDay[d] || { date: d, total: 0, completed: 0 };
+      day.total++; if (done) day.completed++;
+      String(o.PanelCodes || '').split(',').filter(String).forEach(function (pc) { byPanel[pc] = (byPanel[pc] || 0) + 1; });
+    });
+    tats.sort(function (a, b) { return a - b; });
+    s.avgTatHours = tats.length ? Math.round(tats.reduce(function (a, b) { return a + b; }, 0) / tats.length * 10) / 10 : null;
+    s.medianTatHours = tats.length ? tats[Math.floor(tats.length / 2)] : null;
+    s.completionRate = s.total ? Math.round(s.completed / s.total * 1000) / 10 : 0;
+    var pm = Catalog.panelMap();
+    return {
+      from: c.from, to: c.to, who: c.who, summary: s,
+      byDay: Object.keys(byDay).sort().map(function (k) { return byDay[k]; }),
+      byPanel: Object.keys(byPanel).map(function (k) { return { panelCode: k, panelName: (pm[k] || {}).PanelName || k, count: byPanel[k] }; })
+        .sort(function (a, b) { return b.count - a.count; })
+    };
+  },
+
   /** Báo cáo năng suất theo nhân viên. p: { from, to } */
   productivity: function (p) {
     var to = toDateStr_(p.to) || todayStr_();
@@ -2967,6 +3256,8 @@ function setup() {
     { Key: 'FOLLOWUP_PRESETS', Value: '7,14,30,90,180', Description: 'Gợi ý số ngày tái khám' },
     { Key: 'SESSION_HOURS', Value: '6', Description: 'Thời hạn phiên đăng nhập (giờ, tối đa 6)' }
   ]);
+  addSettingIfMissing_('LOGIN_BG_URL', '', 'Ảnh nền màn hình đăng nhập (URL ảnh công khai). Trống = ảnh mặc định');
+  addSettingIfMissing_('LOGIN_BG_DIM', '0.35', 'Độ tối lớp phủ ảnh nền đăng nhập: 0 (không phủ) – 0.8');
   addSettingIfMissing_('AUTO_CREATE_YEAR_DB', 'TRUE', 'TRUE = tự tạo Google Sheet DB_<năm> khi sang năm mới / DB đầy');
 
   seedIfEmpty_(T.ROLES, [
@@ -2994,6 +3285,13 @@ function setup() {
   seedIfEmpty_(T.PANELS, SEED_CATALOG.panels);
   seedIfEmpty_(T.TESTS, SEED_CATALOG.tests);
   seedIfEmpty_(T.PANEL_TESTS, SEED_CATALOG.panelTests);
+  // v1.4.2: khổ giấy in theo từng nhóm (theo mẫu Word cũ) – chỉ điền ô đang trống, không ghi đè cấu hình admin
+  var seedSize = {};
+  SEED_CATALOG.panels.forEach(function (x) { seedSize[x.PanelCode] = x.PageSize || ''; });
+  Db.readAll(T.PANELS).forEach(function (r) {
+    if (!String(r.PageSize || '').trim() && seedSize[r.PanelCode]) Db.updateRow(T.PANELS, null, r._row, { PageSize: seedSize[r.PanelCode] });
+  });
+  CacheUtil.remove(CACHE.CATALOG);
 
   // Admin account (đổi mật khẩu ngay lần đăng nhập đầu)
   if (!Db.findOne(T.USERS, null, 'Username', 'admin')) {
@@ -3120,7 +3418,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 1,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A4"
 },
 {
 "PanelCode": "GD",
@@ -3131,7 +3430,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 2,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "DK",
@@ -3142,7 +3442,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 3,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "TG",
@@ -3153,7 +3454,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 4,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "NT",
@@ -3164,7 +3466,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 5,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "DR",
@@ -3175,7 +3478,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 6,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "VS",
@@ -3186,7 +3490,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 7,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "TD",
@@ -3197,7 +3502,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 8,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A4"
 },
 {
 "PanelCode": "ND",
@@ -3208,7 +3514,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 9,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "ID",
@@ -3219,7 +3526,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 10,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "DA",
@@ -3230,7 +3538,8 @@ var SEED_CATALOG = {
 "Price": 0,
 "SortOrder": 11,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 },
 {
 "PanelCode": "GN",
@@ -3241,7 +3550,8 @@ var SEED_CATALOG = {
 "Price": 140000,
 "SortOrder": 12,
 "IsActive": true,
-"TemplateDocId": ""
+"TemplateDocId": "",
+"PageSize": "A5"
 }
 ],
 "tests": [
