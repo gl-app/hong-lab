@@ -61,7 +61,10 @@
       el.querySelector('.modal-dialog').className = 'modal-dialog modal-dialog-scrollable ' + (opts.size ? 'modal-' + opts.size : '');
       document.getElementById('app-modal-content').innerHTML = html;
       var m = bootstrap.Modal.getOrCreateInstance(el);
-      m.show();
+      // Hộp thoại trước đang đóng dở (vd vừa bấm Xác nhận) → chờ đóng xong mới mở, nếu không Bootstrap bỏ qua lệnh mở
+      if (el.style.display === 'block' && !el.classList.contains('show')) {
+        el.addEventListener('hidden.bs.modal', function once() { el.removeEventListener('hidden.bs.modal', once); m.show(); });
+      } else m.show();
       return { el: el, hide: function () { m.hide(); }, body: document.getElementById('app-modal-content') };
     },
     confirm: function (title, message, okLabel, danger) {
@@ -369,8 +372,12 @@
       a.classList.toggle('active', k === key || (key === 'order' && k === 'order-search') || (key === 'patient' && k === 'order-search'));
     });
     document.getElementById('page-title').textContent = TITLES[key] || '';
-    var view = document.getElementById('view');
+    var host = document.getElementById('view');
     if (App._cleanup) { try { App._cleanup(); } catch (e) { /* ignore */ } App._cleanup = null; }
+    // Mỗi lần chuyển trang dùng 1 khung mới: dữ liệu trang cũ tải về chậm chỉ ghi vào khung cũ (đã gỡ), không đè lên trang mới
+    var view = document.createElement('div');
+    host.innerHTML = '';
+    host.appendChild(view);
     view.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
     try { App.views[key](view, parts.slice(1).map(decodeURIComponent)); }
     catch (e) { console.error(e); view.innerHTML = U.empty('Lỗi hiển thị: ' + e.message, 'bi-bug'); }

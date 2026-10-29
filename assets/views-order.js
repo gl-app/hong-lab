@@ -10,6 +10,9 @@
     p = p || {};
     var provinces = App.lookup('PROVINCE');
     var pv = p.Province || provinces[0] || '';
+    // BN mới: Phường/Xã mặc định (Settings.DEFAULT_WARD) khi đang ở Tỉnh mặc định; BN cũ giữ nguyên dữ liệu
+    var isNew = !p.PatientID;
+    var wd = p.Ward || (isNew && pv === (provinces[0] || '') ? App.setting('DEFAULT_WARD', 'Phường Pleiku') : '');
     return '<form id="pt-form" class="row g-2">' +
       '<input type="hidden" name="PatientID" value="' + esc(p.PatientID || '') + '">' +
       '<div class="col-12"><label class="form-label">Họ và tên *</label><input class="form-control" name="FullName" required value="' + esc(p.FullName || '') + '" style="text-transform:uppercase"></div>' +
@@ -20,7 +23,7 @@
       '<div class="col-12 col-md-6"><label class="form-label">Số điện thoại</label><input class="form-control" name="Phone" inputmode="tel" value="' + esc(p.Phone || '') + '"></div>' +
       '<div class="col-12 col-md-6"><label class="form-label">Tỉnh / TP</label><input class="form-control" name="Province" list="dl-province" value="' + esc(pv) + '" autocomplete="off">' +
         '<datalist id="dl-province">' + provinces.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('') + '</datalist></div>' +
-      '<div class="col-12 col-md-6"><label class="form-label">Phường / Xã</label><input class="form-control" name="Ward" list="dl-ward" value="' + esc(p.Ward || '') + '" placeholder="Gõ để chọn…" autocomplete="off">' +
+      '<div class="col-12 col-md-6"><label class="form-label">Phường / Xã</label><input class="form-control" name="Ward" list="dl-ward" value="' + esc(wd) + '" placeholder="Gõ để chọn…" autocomplete="off">' +
         '<datalist id="dl-ward">' + wardOptions(pv) + '</datalist></div>' +
       '<div class="col-12 col-md-6"><label class="form-label">Địa chỉ (số nhà, đường, thôn…)</label><input class="form-control" name="Address" value="' + esc(p.Address || '') + '"></div>' +
       '</form>';
@@ -34,6 +37,11 @@
       if (e.target.name !== 'Province') return;
       var dl = root.querySelector('#dl-ward');
       if (dl) dl.innerHTML = wardOptions(e.target.value.trim());
+      // Đổi sang tỉnh khác → bỏ Phường/Xã mặc định (không còn đúng tỉnh)
+      var wf = root.querySelector('[name="Ward"]');
+      var list = (App.state.catalog.wards || {})[e.target.value.trim()] || [];
+      var known = App.lookup('PROVINCE').indexOf(e.target.value.trim()) > -1;   // chỉ xét khi đã chọn xong 1 tỉnh, không xét lúc đang gõ dở
+      if (known && wf && wf.value && list.indexOf(wf.value) === -1) wf.value = '';
     });
   }
   App.bindPatientForm = bindPatientForm;
@@ -393,12 +401,24 @@
         });
       }
       var btns = U.$$('#o-save, #o-save-print', view);
-      btns.forEach(function (b) { b.disabled = true; });
-      U.api('order.create', payload).then(function (d) {
-        U.toast('Đã lưu phiếu ' + d.order.OrderID);
-        if (andPrint) App.quickPrint(d);
-        App.go('order/' + d.order.OrderID);
-      }).catch(function () {}).finally(function () { btns.forEach(function (b) { b.disabled = false; }); });
+      var send = function () {
+        btns.forEach(function (b) { b.disabled = true; });
+        U.api('order.create', payload, { silent: true }).then(function (d) {
+          U.toast('Đã lưu phiếu ' + d.order.OrderID);
+          if (andPrint) App.quickPrint(d);
+          App.go('order/' + d.order.OrderID);
+        }).catch(function (e) {
+          if (e.code !== 'DUPLICATE') { if (e.code !== 'UNAUTHORIZED') U.toast(e.message || 'Lỗi', 'error'); return; }
+          // Có thể đang tạo dư: hỏi lại trước khi tạo thêm
+          var m = String(e.message).match(/XN-\d{6}-\d+/);
+          U.confirm('Có thể đang tạo trùng phiếu', '<div class="d-flex gap-3"><i class="bi bi-exclamation-triangle-fill text-warning fs-3"></i><div>' + esc(e.message) +
+            (m ? '<div class="mt-2"><a href="#/order/' + m[0] + '" data-bs-dismiss="modal"><i class="bi bi-box-arrow-up-right"></i> Mở phiếu ' + m[0] + '</a></div>' : '') +
+            '<div class="mt-2 text-muted small">Nếu đây là lần khám/lấy mẫu khác trong ngày, bấm "Vẫn tạo phiếu".</div></div></div>', 'Vẫn tạo phiếu').then(function (go) {
+            if (go) { payload.force = true; send(); }
+          });
+        }).finally(function () { btns.forEach(function (b) { b.disabled = false; }); });
+      };
+      send();
     }
     U.$('#o-save', view).onclick = function () { save(false); };
     if (U.$('#o-save-print', view)) U.$('#o-save-print', view).onclick = function () { save(true); };
@@ -486,7 +506,7 @@
             '<button class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Thêm"></button><ul class="dropdown-menu dropdown-menu-end">' +
             '<li><button class="dropdown-item" data-export="pdf"><i class="bi bi-filetype-pdf"></i> Tải PDF</button></li><li><button class="dropdown-item" data-export="docx"><i class="bi bi-filetype-docx"></i> Tải Word (.docx)</button></li></ul></div>' : '') +
           (App.can('order.edit') && !cancelled ? '<button class="btn btn-outline-secondary" id="d-edit"><i class="bi bi-pencil-square"></i> Sửa phiếu</button>' : '') +
-          (App.can('order.cancel') && !cancelled ? '<button class="btn btn-outline-danger" id="d-cancel"><i class="bi bi-x-circle"></i> Hủy</button>' : '') +
+          (canCancel(data) && !cancelled ? '<button class="btn btn-outline-danger" id="d-cancel"><i class="bi bi-x-circle"></i> Hủy phiếu</button>' : '') +
           '</div></div>' +
         '<div class="row g-3 mb-3">' +
           '<div class="col-lg-7"><div class="card h-100"><div class="card-body"><div class="d-flex justify-content-between"><div>' +
@@ -610,12 +630,7 @@
       var ed = U.$('#d-edit', view);
       if (ed) ed.onclick = editOrder;
       var cc = U.$('#d-cancel', view);
-      if (cc) cc.onclick = function () {
-        U.prompt('Hủy phiếu ' + data.order.OrderID, 'Lý do hủy (bắt buộc, được ghi nhật ký)', true).then(function (reason) {
-          if (!reason) return;
-          U.api('order.cancel', { orderId: data.order.OrderID, reason: reason }).then(function (d) { data = d; U.toast('Đã hủy phiếu'); render(); }).catch(function () {});
-        });
-      };
+      if (cc) cc.onclick = function () { cancelDialog(data.order, function (d) { data = d; U.toast('Đã hủy phiếu ' + d.order.OrderID); render(); }); };
     }
 
     function editOrder() {
@@ -677,6 +692,35 @@
       m.hide(); cb(codes);
     };
   };
+
+  /* ================================================================ CANCEL (hủy phiếu) */
+  /** Có quyền "Hủy phiếu", hoặc là người tạo & phiếu dư: tạo hôm nay, chưa có kết quả, chưa in (backend kiểm tra lại). */
+  function canCancel(data) {
+    if (App.can('order.cancel')) return true;
+    var o = data.order, me = App.state.user.username;
+    return App.can('order.create') && o.CreatedBy === me && String(o.CreatedAt || '').substring(0, 10) === U.today() && !o.FirstResultAt &&
+      !(data.panels || []).some(function (p) { return Number(p.PrintCount || 0) > 0; });
+  }
+  var CANCEL_REASONS = ['Tạo trùng / dư', 'Bệnh nhân không làm xét nghiệm', 'Nhập sai bệnh nhân / thông tin', 'Khác'];
+  function cancelDialog(o, done) {
+    var m = U.modal('<div class="modal-header"><h5 class="modal-title"><i class="bi bi-x-circle text-danger"></i> Hủy phiếu ' + esc(o.OrderID) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
+      '<div class="modal-body"><div class="small text-muted mb-2">' + esc(o.PatientName) + ' · ' + U.vnDate(o.OrderDate) + ' · ' + U.chips(o.PanelCodes) + '</div>' +
+      '<label class="form-label">Lý do hủy</label>' +
+      CANCEL_REASONS.map(function (r, i) {
+        return '<div class="form-check"><input class="form-check-input" type="radio" name="cr" id="cr' + i + '" value="' + esc(r) + '"' + (i === 0 ? ' checked' : '') + '><label class="form-check-label" for="cr' + i + '">' + esc(r) + '</label></div>';
+      }).join('') +
+      '<textarea class="form-control mt-2" id="cr-note" rows="2" placeholder="Ghi chú thêm (bắt buộc khi chọn Khác)"></textarea>' +
+      '<div class="form-text">Phiếu đã hủy vẫn được lưu để tra cứu, không tính vào doanh thu/thống kê. Thao tác được ghi nhật ký.</div></div>' +
+      '<div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Đóng</button><button class="btn btn-danger" id="cr-ok"><i class="bi bi-x-circle"></i> Hủy phiếu</button></div>');
+    m.body.querySelector('#cr-ok').onclick = function () {
+      var r = (m.body.querySelector('input[name="cr"]:checked') || {}).value || '';
+      var note = m.body.querySelector('#cr-note').value.trim();
+      if (r === 'Khác' && !note) { U.toast('Nhập lý do hủy', 'warn'); m.body.querySelector('#cr-note').focus(); return; }
+      var reason = r === 'Khác' ? note : (note ? r + ' – ' + note : r);
+      var btn = this; btn.disabled = true;
+      U.api('order.cancel', { orderId: o.OrderID, reason: reason }).then(function (d) { m.hide(); done(d); }).catch(function () {}).finally(function () { btn.disabled = false; });
+    };
+  }
 
   /* ================================================================ QUICK PRINT (browser) */
   App.quickPrint = function (data, codes) {

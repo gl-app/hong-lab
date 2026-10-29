@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '1.5.4',
+  VERSION: '1.7.0',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -76,7 +76,7 @@ SCHEMA[T.TESTS]       = ['TestCode', 'TestName', 'Unit', 'ResultType', 'RefMinM'
 SCHEMA[T.PANEL_TESTS] = ['PanelCode', 'TestCode', 'SortOrder'];
 SCHEMA[T.DOCTORS]     = ['DoctorName', 'IsActive', 'SortOrder'];
 SCHEMA[T.LOOKUPS]     = ['ListCode', 'Value', 'SortOrder'];
-SCHEMA[T.YEAR_DBS]    = ['Year', 'SpreadsheetId', 'Mode', 'Note', 'UsedCells', 'CheckedAt'];
+SCHEMA[T.YEAR_DBS]    = ['Year', 'SpreadsheetId', 'Mode', 'Note', 'UsedCells', 'CheckedAt', 'OrderRows', 'ResultRows'];
 SCHEMA[T.WARDS]       = ['Province', 'WardName', 'SortOrder', 'IsActive'];
 SCHEMA[T.SEQUENCES]   = ['SeqKey', 'LastValue', 'UpdatedAt'];
 SCHEMA[T.SYS_LOG]     = ['Timestamp', 'Username', 'Action', 'Entity', 'EntityID', 'Detail'];
@@ -164,7 +164,11 @@ var CACHE = {
 var CAPACITY = {
   MAX_CELLS: 10000000,
   WARN_PERCENT: 70,        // cảnh báo Admin
-  ROLLOVER_PERCENT: 85     // tự tạo DB_<năm>_<n> và chuyển DB cũ sang FULL
+  ROLLOVER_PERCENT: 85,    // tự tạo DB_<năm>_<n> và chuyển DB cũ sang FULL
+  // Ngưỡng số dòng mặc định (Admin chỉnh tại Quản trị → Kết nối dữ liệu năm). Results nhiều dòng nhất (~8–10 dòng/phiếu).
+  DEFAULT_MAX_ORDER_ROWS: 20000,
+  DEFAULT_MAX_RESULT_ROWS: 150000,
+  ROW_WARN_PERCENT: 80
 };
 
 /** Chế độ DB năm: RW = đang ghi phiếu mới | FULL = đầy, chỉ sửa phiếu cũ | RO = khóa sổ, chỉ đọc. */
@@ -214,7 +218,7 @@ var ROUTES = {
   'order.get':             { fn: function (p, c) { return OrderService.get(p.orderId, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
   'order.search':          { fn: function (p, c) { return OrderService.search(p, c); }, perm: PERM.ORDER_VIEW },
   'order.saveResults':     { fn: function (p, c) { return OrderService.saveResults(p, c); }, perm: PERM.RESULT_ENTER },
-  'order.cancel':          { fn: function (p, c) { return OrderService.cancel(p, c); }, perm: PERM.ORDER_CANCEL },
+  'order.cancel':          { fn: function (p, c) { return OrderService.cancel(p, c); }, perm: PERM.ORDER_CANCEL + '|' + PERM.ORDER_CREATE },   // người tạo: tự hủy phiếu dư (kiểm tra trong service)
   'order.audit':           { fn: function (p) { return Audit.listForEntity(p.orderId); }, perm: PERM.ORDER_VIEW },
 
   'user.options':          { fn: function () { return WorkService.userOptions(); }, perm: PERM.ORDER_VIEW + '|' + PERM.ORDER_CREATE + '|' + PERM.RESULT_ENTER },
@@ -247,6 +251,7 @@ var ROUTES = {
   'admin.years.list':      { fn: function () { return AdminService.listYearDbs(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.save':      { fn: function (p, c) { return AdminService.saveYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.optimize':  { fn: function (p, c) { return AdminService.optimizeStorage(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.years.limits':    { fn: function (p, c) { return p && p.orders !== undefined ? AdminService.saveYearLimits(p, c) : YearDb.limits(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.create':    { fn: function (p, c) { return AdminService.createYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.capacity':  { fn: function () { return AdminService.refreshCapacity(); }, perm: PERM.ADMIN_CONFIG },
   'admin.wards.save':      { fn: function (p, c) { return AdminService.saveWards(p, c); }, perm: PERM.ADMIN_CONFIG },
@@ -575,7 +580,7 @@ var Db = (function () {
       var hdr = header_(sh);
       if (SCHEMA[table].some(function (c) { return !hdr.map.hasOwnProperty(c); })) {
         ensureSheet_(ss, table);
-        delete headerMemo[sh.getParent().getId() + '|' + sh.getName()];
+        forgetHeader_(sh);
       }
     }
     sheetMemo[key] = sh;
@@ -594,6 +599,7 @@ var Db = (function () {
       var need = start + missing.length - 1;
       if (sh.getMaxColumns() < need) sh.insertColumnsAfter(sh.getMaxColumns(), need - sh.getMaxColumns());   // sheet đã cắt gọn cột
       sh.getRange(1, start, 1, missing.length).setValues([missing]);
+      if (!isNew) forgetHeader_(sh);
     }
     var width = Math.max(sh.getLastColumn(), cols.length);
     sh.getRange(1, 1, 1, width).setFontWeight('bold').setBackground('#0f4c5c').setFontColor('#ffffff');
@@ -617,35 +623,90 @@ var Db = (function () {
    * Ghi thêm dữ liệu vẫn an toàn: insert/replaceAll/ensureSheet_ tự mở rộng lưới khi cần.
    */
   var ROW_BUFFER = 200;
+  /** Cột cuối thật sự cần giữ: tiêu đề + cột có dữ liệu thật (ô chỉ chứa khoảng trắng/chuỗi rỗng coi như trống). */
+  function keepWidth_(sh) {
+    var lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+    if (lastCol < 1) return 1;
+    var head = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var hw = 0;
+    head.forEach(function (h, i) { if (String(h).trim() !== '') hw = i + 1; });
+    hw = Math.max(1, hw);
+    if (lastCol <= hw || lastRow < 1) return Math.max(hw, 1);
+    // Cột bên phải tiêu đề: chỉ giữ nếu còn dữ liệu thật (tránh xóa nhầm dữ liệu không có tiêu đề)
+    var extra = sh.getRange(1, hw + 1, lastRow, lastCol - hw).getValues(), keep = hw;
+    extra.forEach(function (row) { row.forEach(function (v, j) { if (String(v).trim() !== '' && hw + j + 1 > keep) keep = hw + j + 1; }); });
+    return keep;
+  }
   function trimSheet_(sh, rowBuffer) {
     var before = sh.getMaxRows() * sh.getMaxColumns();
-    var lastCol = Math.max(1, sh.getLastColumn()), maxCol = sh.getMaxColumns();
-    if (maxCol > lastCol) sh.deleteColumns(lastCol + 1, maxCol - lastCol);
+    var width = keepWidth_(sh), maxCol = sh.getMaxColumns();
+    if (maxCol > width) sh.deleteColumns(width + 1, maxCol - width);
     var keep = Math.max(2, sh.getLastRow() + (rowBuffer === undefined ? ROW_BUFFER : rowBuffer));
     var maxRow = sh.getMaxRows();
     if (maxRow > keep) sh.deleteRows(keep + 1, maxRow - keep);
+    CacheService.getScriptCache().remove('mr_' + sh.getParent().getId() + '|' + sh.getName());
     return before - sh.getMaxRows() * sh.getMaxColumns();
   }
 
-  /** Cắt gọn mọi bảng của hệ thống trong 1 file (bỏ qua tab do người dùng tự thêm). */
+  /** Cắt gọn mọi bảng của hệ thống trong 1 file (bỏ qua tab do người dùng tự thêm). Lỗi 1 sheet không chặn sheet khác. */
   function optimize(id) {
-    var ss = openById_(id), freed = 0, before = usedCells(id);
-    ss.getSheets().forEach(function (sh) { if (SCHEMA[sh.getName()]) freed += trimSheet_(sh, ROW_BUFFER); });
-    return { id: id, name: ss.getName(), before: before, after: before - freed, freed: freed };
+    var ss = openById_(id), freed = 0, before = usedCells(id), sheets = [];
+    ss.getSheets().forEach(function (sh) {
+      var name = sh.getName();
+      if (!SCHEMA[name]) return;
+      var info = { sheet: name, rows: sh.getMaxRows(), cols: sh.getMaxColumns() };
+      try {
+        info.freed = trimSheet_(sh, ROW_BUFFER);
+        freed += info.freed;
+      } catch (e) { info.error = e.message; }
+      info.rowsAfter = sh.getMaxRows(); info.colsAfter = sh.getMaxColumns();
+      sheets.push(info);
+    });
+    var errs = sheets.filter(function (x) { return x.error; });
+    return { id: id, name: ss.getName(), before: before, after: before - freed, freed: freed, sheets: sheets,
+             error: errs.length ? errs.map(function (x) { return x.sheet + ': ' + x.error; }).join('; ') : undefined };
   }
   function coreIds() { return [propId_(PROP.CONFIG_DB_ID), propId_(PROP.PATIENT_DB_ID)]; }
 
-  /** Header → column index map (0-based). */
+  /**
+   * Header → column index map (0-based).
+   * Lưu thêm vào CacheService (1 giờ) → mỗi request không phải đọc lại dòng tiêu đề (tiết kiệm 2 lệnh gọi / bảng).
+   * Đổi cấu trúc cột bằng tay trên Sheet → Quản trị → Hệ thống → "Xóa cache" (đổi phiên bản khóa cache tiêu đề).
+   */
+  var HDR_TTL = 3600;
+  var hdrVer_ = null;
+  function hdrVersion_() {
+    if (hdrVer_ === null) hdrVer_ = PropertiesService.getScriptProperties().getProperty('HDR_VER') || '1';
+    return hdrVer_;
+  }
+  function hdrKey_(sh) { return 'hdr' + hdrVersion_() + '_' + sh.getParent().getId() + '|' + sh.getName(); }
   function header_(sh) {
     var key = sh.getParent().getId() + '|' + sh.getName();
     if (!headerMemo[key]) {
-      var h = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
+      var ck = hdrKey_(sh), h = null;
+      var cached = CacheService.getScriptCache().get(ck);
+      if (cached) { try { h = JSON.parse(cached); } catch (e) { h = null; } }
+      if (!h) {
+        h = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(function (x) { return x === null || x === undefined ? '' : String(x); });
+        try { CacheService.getScriptCache().put(ck, JSON.stringify(h), HDR_TTL); } catch (e) { /* header quá dài – bỏ qua cache */ }
+      }
       var map = {};
       h.forEach(function (name, i) { if (name) map[String(name).trim()] = i; });
       headerMemo[key] = { map: map, width: h.length, names: h };
     }
     return headerMemo[key];
   }
+  function forgetHeader_(sh) {
+    delete headerMemo[sh.getParent().getId() + '|' + sh.getName()];
+    CacheService.getScriptCache().remove(hdrKey_(sh));
+  }
+  /** Bỏ toàn bộ cache tiêu đề (đổi phiên bản khóa). */
+  function bumpHeaderVersion() {
+    var v = String(Number(hdrVersion_()) + 1);
+    PropertiesService.getScriptProperties().setProperty('HDR_VER', v);
+    hdrVer_ = v; headerMemo = {};
+  }
+  function colLetter_(n) { var s = ''; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 
   function rowToObj_(row, hdr) {
     var o = {};
@@ -718,18 +779,31 @@ var Db = (function () {
 
   /** Row numbers where `column` exactly equals `value` (TextFinder). */
   function findRowNums(table, year, column, value) {
+    if (value === '' || value === null || value === undefined) return [];
     var sh = sheet(table, year);
-    var last = sh.getLastRow();
-    if (last < 2 || value === '' || value === null || value === undefined) return [];
     var hdr = header_(sh);
     if (!hdr.map.hasOwnProperty(column)) throw new AppError('SERVER_ERROR', 'Thiếu cột ' + column + ' trong ' + table);
-    var rng = sh.getRange(2, hdr.map[column] + 1, last - 1, 1);
+    var col = colLetter_(hdr.map[column] + 1);
+    var rng = sh.getRange(col + '2:' + col);   // cột mở – không cần hỏi dòng cuối (tiết kiệm 1 lệnh gọi)
     return rng.createTextFinder(String(value)).matchEntireCell(true).matchCase(false).findAll()
       .map(function (r) { return r.getRow(); });
   }
 
+  /** Bảng có cache (Orders, OrderPanels) đang nằm sẵn trong CacheService → lọc trong bộ nhớ, 0 lệnh gọi Sheets. */
+  function cachedRows_(table, db) {
+    if (!CACHED_TABLES[table]) return null;
+    var hit = CacheUtil.get(cacheKey_(table, db));
+    if (!hit) return null;
+    return hit.map(function (o) { var r = o.__r; delete o.__r; Object.defineProperty(o, '_row', { value: r, enumerable: false }); return o; });
+  }
+
   /** Objects where column == value. Reads the minimal contiguous block covering matches. */
   function findBy(table, year, column, value) {
+    var mem = cachedRows_(table, year);
+    if (mem) {
+      var want = String(value).toLowerCase();
+      return mem.filter(function (o) { return String(o[column]).toLowerCase() === want; });
+    }
     var rows = findRowNums(table, year, column, value);
     if (!rows.length) return [];
     var sh = sheet(table, year);
@@ -766,10 +840,26 @@ var Db = (function () {
     var sh = sheet(table, year, true);
     var hdr = header_(sh);
     var rows = objs.map(function (o) { return objToRow_(o, hdr); });
-    var start = sh.getLastRow() + 1;
-    if (start + rows.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), start + rows.length - 1 - sh.getMaxRows() + ROW_BUFFER);
-    sh.getRange(start, 1, rows.length, hdr.width).setValues(rows);
+    var start = sh.getLastRow() + 1, need = start + rows.length - 1;
+    // Nhớ số dòng tối đa của lưới (CacheService) → không phải hỏi getMaxRows mỗi lần ghi; sai lệch (ai đó xóa dòng tay) → bắt lỗi, đo lại, ghi lại
+    var mk = 'mr_' + sh.getParent().getId() + '|' + sh.getName(), cache = CacheService.getScriptCache();
+    var maxR = Number(cache.get(mk) || 0);
+    if (!maxR || need > maxR) {
+      maxR = sh.getMaxRows();
+      if (need > maxR) { sh.insertRowsAfter(maxR, need - maxR + ROW_BUFFER); maxR = need + ROW_BUFFER; }
+      cache.put(mk, String(maxR), 21600);
+    }
+    try {
+      sh.getRange(start, 1, rows.length, hdr.width).setValues(rows);
+    } catch (e) {
+      cache.remove(mk);
+      var real = sh.getMaxRows();
+      if (need <= real) throw e;
+      sh.insertRowsAfter(real, need - real + ROW_BUFFER);
+      sh.getRange(start, 1, rows.length, hdr.width).setValues(rows);
+    }
     invalidate_(table, year);
+    if (table === T.ORDERS || table === T.RESULTS) RowCounter.note(resolveId_(table, year, true), table, start + rows.length - 2);   // số dòng dữ liệu, không tốn thêm lệnh gọi Sheets
   }
 
   /** Update a single row (merge `patch` onto existing values). */
@@ -832,6 +922,8 @@ var Db = (function () {
     deleteRows: deleteRows,
     replaceAll: replaceAll,
     usedCells: usedCells,
+    bumpHeaderVersion: bumpHeaderVersion,
+    _resetMemo: function () { ssMemo = {}; sheetMemo = {}; headerMemo = {}; },   // mỗi request GAS là 1 lượt thực thi mới (dùng cho đo hiệu năng)
     trimSheet: trimSheet_,
     optimize: optimize,
     coreIds: coreIds,
@@ -851,7 +943,8 @@ var YearDb = {
     if (cached) return cached;
     var rows = Db.readAll(T.YEAR_DBS).map(function (r) {
       return { Year: Number(r.Year), SpreadsheetId: String(r.SpreadsheetId).trim(), Mode: String(r.Mode || 'RW').toUpperCase(),
-               Note: r.Note, UsedCells: toNum_(r.UsedCells, 0), CheckedAt: r.CheckedAt };
+               Note: r.Note, UsedCells: toNum_(r.UsedCells, 0), CheckedAt: r.CheckedAt,
+               OrderRows: toNum_(r.OrderRows, 0), ResultRows: toNum_(r.ResultRows, 0) };
     }).filter(function (r) { return r.Year && r.SpreadsheetId; });
     rows.sort(function (a, b) { return a.Year - b.Year; });
     CacheUtil.put(CACHE.YEAR_DBS, rows, CACHE.TTL_LONG);
@@ -911,11 +1004,35 @@ var YearDb = {
     }
     var auto = String(Settings.get('AUTO_CREATE_YEAR_DB', 'TRUE')).toUpperCase() !== 'FALSE';
     if (act) {
-      var pct = act.UsedCells / CAPACITY.MAX_CELLS * 100;
-      if (pct < CAPACITY.ROLLOVER_PERCENT || !auto) return act.SpreadsheetId;
+      if (!auto || !YearDb.isFull(act)) return act.SpreadsheetId;
     }
     if (!auto) throw new AppError('NO_YEAR_DB', 'Chưa có DB năm ' + year + '. Admin vào Quản trị → Kết nối dữ liệu năm → Tạo DB mới.');
     return YearDb.create(year, 'system').SpreadsheetId;
+  },
+  /** Ngưỡng tạo DB nối tiếp (Settings, 0 = không giới hạn theo dòng). */
+  limits: function () {
+    var n = function (k, d) { var v = Number(String(Settings.get(k, '')).replace(/[^\d]/g, '')); return isFinite(v) && String(Settings.get(k, '')).trim() !== '' ? v : d; };
+    return { orders: n('DB_MAX_ORDER_ROWS', CAPACITY.DEFAULT_MAX_ORDER_ROWS), results: n('DB_MAX_RESULT_ROWS', CAPACITY.DEFAULT_MAX_RESULT_ROWS) };
+  },
+  /** Số dòng dữ liệu thực của Orders / Results trong 1 DB (đọc trực tiếp – nhanh, không tải dữ liệu). */
+  rowCounts: function (id) {
+    var ss = Db.openById(id);
+    var cnt = function (t) { var sh = ss.getSheetByName(t); return sh ? Math.max(0, sh.getLastRow() - 1) : 0; };
+    return { orders: cnt(T.ORDERS), results: cnt(T.RESULTS) };
+  },
+  /** DB đang ghi đã chạm ngưỡng: số ô ≥ 85% HOẶC Orders/Results vượt số dòng tối đa. */
+  isFull: function (db) {
+    if (db.UsedCells / CAPACITY.MAX_CELLS * 100 >= CAPACITY.ROLLOVER_PERCENT) return true;
+    var lim = YearDb.limits();
+    if (!lim.orders && !lim.results) return false;
+    var over = function (c, ratio) { return (lim.orders > 0 && c.orders >= lim.orders * ratio) || (lim.results > 0 && c.results >= lim.results * ratio); };
+    var rc = RowCounter.get(db.SpreadsheetId);
+    if (rc) return over(rc, 1);                       // đường nhanh: 0 lệnh gọi Google Sheets
+    var reg = { orders: db.OrderRows || 0, results: db.ResultRows || 0 };
+    if (!over(reg, 0.9)) return false;                // còn xa ngưỡng theo số đo gần nhất → khỏi đếm
+    try { rc = YearDb.rowCounts(db.SpreadsheetId); } catch (e) { return false; }   // gần ngưỡng: đếm thật 1 lần rồi lưu cache
+    RowCounter.set(db.SpreadsheetId, rc);
+    return over(rc, 1);
   },
   /** Tạo Google Sheet DB mới cho năm, đặt cùng thư mục với DB gần nhất, đăng ký RW. */
   create: function (year, username) {
@@ -938,7 +1055,8 @@ var YearDb = {
     Db.readAll(T.YEAR_DBS).forEach(function (r) {
       if (Number(r.Year) === year && String(r.Mode).toUpperCase() === DB_MODE.RW) Db.updateRow(T.YEAR_DBS, null, r._row, { Mode: DB_MODE.FULL });
     });
-    var row = { Year: year, SpreadsheetId: ss.getId(), Mode: DB_MODE.RW, Note: name, UsedCells: Db.usedCells(ss.getId()), CheckedAt: nowIso_() };
+    var row = { Year: year, SpreadsheetId: ss.getId(), Mode: DB_MODE.RW, Note: name, UsedCells: Db.usedCells(ss.getId()), CheckedAt: nowIso_(), OrderRows: 0, ResultRows: 0 };
+    RowCounter.set(ss.getId(), { orders: 0, results: 0 });
     Db.insert(T.YEAR_DBS, null, [row]);
     YearDb.invalidate();
     SysLog.write(username || 'system', 'YEAR_DB_CREATE', 'YearDatabase', name, { id: ss.getId(), url: ss.getUrl() });
@@ -948,9 +1066,17 @@ var YearDb = {
   refreshCapacity: function () {
     var rows = Db.readAll(T.YEAR_DBS);
     var items = rows.map(function (r) {
-      var used = '';
-      try { used = Db.usedCells(String(r.SpreadsheetId).trim()); } catch (e) { used = ''; }
-      return { row: r._row, patch: { UsedCells: used, CheckedAt: nowIso_() } };
+      var used = '', patch = { CheckedAt: nowIso_() };
+      try {
+        var id = String(r.SpreadsheetId).trim();
+        used = Db.usedCells(id);
+        patch.Note = Db.openById(id).getName();   // đồng bộ tên khi file bị đổi tên trực tiếp trên Drive
+        var rc = YearDb.rowCounts(id);
+        patch.OrderRows = rc.orders; patch.ResultRows = rc.results;
+        RowCounter.set(id, rc);
+      } catch (e) { used = ''; }
+      patch.UsedCells = used;
+      return { row: r._row, patch: patch };
     });
     Db.updateRows(T.YEAR_DBS, null, items);
     YearDb.invalidate();
@@ -959,28 +1085,87 @@ var YearDb = {
   invalidate: function () { CacheUtil.remove(CACHE.YEAR_DBS); }
 };
 
+/**
+ * Bộ đếm số dòng Orders/Results của từng DB năm (CacheService, 6 giờ).
+ *  - Cập nhật miễn phí mỗi lần Db.insert (đã biết vị trí dòng cuối) → kiểm tra ngưỡng không cần gọi Google Sheets.
+ *  - Mất cache → dùng số liệu đo lúc 01:00 / "Đo dung lượng" trong YearDatabases; chỉ đếm thật khi đã gần ngưỡng (≥ 90%).
+ */
+var RowCounter = {
+  TTL: 21600,
+  key_: function (id) { return 'rc_' + id; },
+  get: function (id) {
+    var v = CacheService.getScriptCache().get(RowCounter.key_(id));
+    return v ? JSON.parse(v) : null;
+  },
+  set: function (id, counts) {
+    CacheService.getScriptCache().put(RowCounter.key_(id), JSON.stringify({ orders: counts.orders || 0, results: counts.results || 0 }), RowCounter.TTL);
+  },
+  note: function (id, table, rows) {
+    var c = RowCounter.get(id);
+    if (!c) {
+      var e = YearDb.byId(id);
+      c = { orders: e ? e.OrderRows : 0, results: e ? e.ResultRows : 0 };
+    }
+    c[table === T.ORDERS ? 'orders' : 'results'] = Math.max(0, rows);
+    RowCounter.set(id, c);
+  }
+};
+
 /** Sequences – atomic counters (call inside withLock_). */
 var Sequence = {
+  /**
+   * Bộ đếm số BN / số phiếu – lưu ở ScriptProperties (không phải lệnh gọi Google Sheets, không cần mở file Config).
+   * Gọi trong withLock_. Lần đầu (chưa có property) lấy giá trị từ sheet Sequences; mỗi đêm đồng bộ ngược vào sheet.
+   */
+  PREFIX: 'SEQ_',
   next: function (seqKey) {
-    var row = Db.findOne(T.SEQUENCES, null, 'SeqKey', seqKey);
-    var val;
-    if (row) {
-      val = Number(row.LastValue || 0) + 1;
-      Db.updateRow(T.SEQUENCES, null, row._row, { LastValue: val, UpdatedAt: nowIso_() });
-    } else {
-      val = 1;
-      Db.insert(T.SEQUENCES, null, [{ SeqKey: seqKey, LastValue: val, UpdatedAt: nowIso_() }]);
+    var props = PropertiesService.getScriptProperties(), k = Sequence.PREFIX + seqKey;
+    var v = props.getProperty(k);
+    if (v === null) {
+      var row = Db.findOne(T.SEQUENCES, null, 'SeqKey', seqKey);
+      v = row ? Number(row.LastValue || 0) : 0;
     }
+    var val = Number(v) + 1;
+    props.setProperty(k, String(val));
     return val;
   },
   /** Make sure the counter is at least `min` (used by migration). */
   ensureAtLeast: function (seqKey, min) {
+    var props = PropertiesService.getScriptProperties(), k = Sequence.PREFIX + seqKey;
     var row = Db.findOne(T.SEQUENCES, null, 'SeqKey', seqKey);
-    if (!row) Db.insert(T.SEQUENCES, null, [{ SeqKey: seqKey, LastValue: min, UpdatedAt: nowIso_() }]);
-    else if (Number(row.LastValue) < min) Db.updateRow(T.SEQUENCES, null, row._row, { LastValue: min, UpdatedAt: nowIso_() });
+    var cur = Math.max(Number(props.getProperty(k) || 0), row ? Number(row.LastValue || 0) : 0);
+    if (cur < min) cur = min;
+    props.setProperty(k, String(cur));
+    if (!row) Db.insert(T.SEQUENCES, null, [{ SeqKey: seqKey, LastValue: cur, UpdatedAt: nowIso_() }]);
+    else if (Number(row.LastValue) !== cur) Db.updateRow(T.SEQUENCES, null, row._row, { LastValue: cur, UpdatedAt: nowIso_() });
+  },
+  /**
+   * Ghi bộ đếm vào sheet Sequences (bản sao để xem/sao lưu) và dọn bộ đếm theo ngày đã qua (> 3 ngày) khỏi ScriptProperties.
+   * Phiếu nhập lùi ngày vẫn đúng số: thiếu property → đọc lại từ sheet. Gọi trong withLock_ (maintenance 01:00).
+   */
+  syncToSheet: function () {
+    var props = PropertiesService.getScriptProperties(), all = props.getProperties();
+    var keys = Object.keys(all).filter(function (k) { return k.indexOf(Sequence.PREFIX) === 0; });
+    if (!keys.length) return 0;
+    var rows = Db.readAll(T.SEQUENCES), byKey = {};
+    rows.forEach(function (r) { byKey[String(r.SeqKey)] = r; });
+    var updates = [], inserts = [], now = nowIso_();
+    keys.forEach(function (k) {
+      var seq = k.substring(Sequence.PREFIX.length), val = Number(all[k]);
+      var r = byKey[seq];
+      if (!r) inserts.push({ SeqKey: seq, LastValue: val, UpdatedAt: now });
+      else if (Number(r.LastValue) < val) updates.push({ row: r._row, patch: { LastValue: val, UpdatedAt: now } });
+    });
+    if (updates.length) Db.updateRows(T.SEQUENCES, null, updates);
+    if (inserts.length) Db.insert(T.SEQUENCES, null, inserts);
+    var cutoff = addDays_(todayStr_(), -3).replace(/-/g, '').substring(2);   // YYMMDD
+    keys.forEach(function (k) {
+      var m = k.match(/^SEQ_XN-(\d{6})$/);
+      if (m && m[1] < cutoff) props.deleteProperty(k);
+    });
+    return keys.length;
   }
 };
-
 var Ids = {
   /** BN-000001 */
   newPatientId: function () { return 'BN-' + pad_(Sequence.next('BN'), 6); },
@@ -1003,13 +1188,15 @@ var Ids = {
  */
 
 var Settings = {
+  _memo: null,
   all: function () {
+    if (Settings._memo) return Settings._memo;
     var c = CacheUtil.get(CACHE.SETTINGS);
-    if (c) return c;
+    if (c) return (Settings._memo = c);
     var map = {};
     Db.readAll(T.SETTINGS).forEach(function (r) { if (r.Key) map[String(r.Key).trim()] = r.Value; });
     CacheUtil.put(CACHE.SETTINGS, map, CACHE.TTL_LONG);
-    return map;
+    return (Settings._memo = map);
   },
   get: function (key, dflt) {
     var v = Settings.all()[key];
@@ -1021,7 +1208,7 @@ var Settings = {
     out.APP_VERSION = APP.VERSION;
     return out;
   },
-  invalidate: function () { CacheUtil.remove(CACHE.SETTINGS); }
+  invalidate: function () { Settings._memo = null; CacheUtil.remove(CACHE.SETTINGS); }
 };
 
 var Roles = {
@@ -1434,6 +1621,17 @@ var PatientService = {
     return { full: !since, stamp: stamp, count: all.length, rows: rows.map(function (x) { return x.r; }) };
   },
 
+  /** Hồ sơ rút gọn từ danh bạ đang cache (0 lệnh gọi Sheets) – null nếu cache chưa có / không thấy. */
+  fromIndex: function (patientId) {
+    var all = CacheUtil.get(PatientService.INDEX_KEY);
+    if (!all) return null;
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i].r;
+      if (r[0] === patientId) return { PatientID: r[0], FullName: r[1], Gender: r[2], BirthYear: r[3], Phone: r[4], Address: r[5], Ward: r[6], Province: r[7] };
+    }
+    return null;
+  },
+
   /** p: { phone?, q?, birthYear?, ward?, limit? } */
   search: function (p) {
     var limit = Math.min(toNum_(p.limit, 30), 200);
@@ -1588,7 +1786,7 @@ var OrderService = {
     // 1) Patient (create first, own lock)
     var patient;
     if (p.patientId) {
-      patient = Db.findOne(T.PATIENTS, null, 'PatientID', p.patientId);
+      patient = PatientService.fromIndex(p.patientId) || Db.findOne(T.PATIENTS, null, 'PatientID', p.patientId);   // ưu tiên danh bạ cache
       if (!patient) throw new AppError('NOT_FOUND', 'Không tìm thấy bệnh nhân ' + p.patientId);
     } else if (p.patient) {
       var saved = PatientService.save(Object.assign({}, p.patient, { force: true }), ctx);
@@ -1598,6 +1796,12 @@ var OrderService = {
     }
 
     var lines = OrderService.buildLines_(p.panels, ctx);
+    // Cảnh báo tạo trùng: cùng BN, cùng ngày, trùng nhóm XN, chưa hủy → FE hỏi lại, gửi force=true để vẫn tạo
+    if (!p.force) {
+      var dup = OrderService.findDuplicate_(patient.PatientID, orderDate, lines.map(function (l) { return l.PanelCode; }));
+      if (dup) throw new AppError('DUPLICATE', 'Bệnh nhân ' + patient.FullName + ' đã có phiếu ' + dup.order.OrderID + ' ngày ' + orderDate.split('-').reverse().join('/') +
+        ' cùng nhóm ' + dup.overlap.join(', ') + ' (tạo lúc ' + String(dup.order.CreatedAt).substring(11, 16) + ' bởi ' + dup.order.CreatedBy + ').');
+    }
     var money = OrderService.money_(lines, p.discount, ctx);
     var followDays = toNum_(p.followUpDays, 0);
     var assignees = WorkService.normAssignees(p.assignedTo);
@@ -1815,6 +2019,35 @@ var OrderService = {
     });
   },
 
+  /** Phiếu chưa hủy của BN trong cùng ngày có trùng nhóm XN (dùng cache Orders nếu có). */
+  findDuplicate_: function (patientId, orderDate, codes) {
+    var list = YearDb.forYear(yearOf_(orderDate)).slice().reverse();
+    for (var i = 0; i < list.length; i++) {
+      var rows;
+      try { rows = Db.findBy(T.ORDERS, list[i].SpreadsheetId, 'PatientID', patientId); } catch (e) { continue; }
+      for (var j = rows.length - 1; j >= 0; j--) {
+        var o = rows[j];
+        if (toDateStr_(o.OrderDate) !== orderDate || o.Status === ENUM.ORDER_STATUS.CANCELLED) continue;
+        var have = String(o.PanelCodes || '').split(',');
+        var overlap = codes.filter(function (c) { return have.indexOf(c) > -1; });
+        if (overlap.length) return { order: o, overlap: overlap };
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Người không có quyền "Hủy phiếu" vẫn được tự hủy phiếu DƯ của chính mình: tạo trong hôm nay, chưa có kết quả, chưa in.
+   * → trả '' nếu được hủy, ngược lại là lý do.
+   */
+  selfCancelBlock_: function (cur, panels, ctx) {
+    if (cur.CreatedBy !== ctx.username) return 'Phiếu do ' + (cur.CreatedBy || 'người khác') + ' tạo.';
+    if (String(cur.CreatedAt).substring(0, 10) !== todayStr_()) return 'Chỉ tự hủy được phiếu tạo trong hôm nay.';
+    if (cur.FirstResultAt) return 'Phiếu đã có kết quả.';
+    if (panels.some(function (x) { return toNum_(x.PrintCount, 0) > 0; })) return 'Phiếu đã in.';
+    return '';
+  },
+
   /* ----------------------------------------------------------------- CANCEL */
   cancel: function (p, ctx) {
     required_(p, ['orderId', 'reason']);
@@ -1822,6 +2055,11 @@ var OrderService = {
     return withLock_(function () {
       var cur = Db.findOne(T.ORDERS, db, 'OrderID', p.orderId);
       if (!cur) throw new AppError('NOT_FOUND', 'Không tìm thấy phiếu ' + p.orderId);
+      if (cur.Status === ENUM.ORDER_STATUS.CANCELLED) throw new AppError('VALIDATION', 'Phiếu đã hủy trước đó.');
+      if (!Auth.hasPerm(ctx, PERM.ORDER_CANCEL)) {
+        var why = OrderService.selfCancelBlock_(cur, Db.findBy(T.ORDER_PANELS, db, 'OrderID', p.orderId), ctx);
+        if (why) throw new AppError('FORBIDDEN', why + ' Bạn chỉ được tự hủy phiếu dư do chính mình tạo trong ngày, chưa có kết quả và chưa in – liên hệ Admin/Bác sĩ để hủy.');
+      }
       Db.updateRow(T.ORDERS, db, cur._row, {
         Status: ENUM.ORDER_STATUS.CANCELLED, FollowUpStatus: cur.FollowUpStatus ? ENUM.FOLLOWUP.SKIPPED : '',
         Note: (cur.Note ? cur.Note + ' | ' : '') + 'HỦY: ' + p.reason,
@@ -2889,8 +3127,18 @@ var AdminService = {
     return Db.readAll(T.YEAR_DBS).map(function (r) {
       var used = toNum_(r.UsedCells, 0);
       return { Year: Number(r.Year), SpreadsheetId: r.SpreadsheetId, Mode: r.Mode || 'RW', Note: r.Note, UsedCells: used,
-               UsedPercent: Math.round(used / CAPACITY.MAX_CELLS * 1000) / 10, CheckedAt: r.CheckedAt };
+               UsedPercent: Math.round(used / CAPACITY.MAX_CELLS * 1000) / 10, CheckedAt: r.CheckedAt,
+               OrderRows: toNum_(r.OrderRows, 0), ResultRows: toNum_(r.ResultRows, 0) };
     }).sort(function (a, b) { return a.Year - b.Year; });
+  },
+
+  /** Ngưỡng số dòng tạo DB nối tiếp. p: { orders, results } (0 = không giới hạn). */
+  saveYearLimits: function (p, ctx) {
+    var o = Math.floor(Number(p.orders)), r = Math.floor(Number(p.results));
+    if (!(o >= 0) || !(r >= 0)) throw new AppError('VALIDATION', 'Ngưỡng phải là số ≥ 0');
+    if ((o > 0 && o < 1000) || (r > 0 && r < 5000)) throw new AppError('VALIDATION', 'Ngưỡng quá nhỏ (tối thiểu 1.000 phiếu / 5.000 dòng kết quả) – sẽ sinh quá nhiều file DB.');
+    AdminService.saveSettings({ items: [{ Key: 'DB_MAX_ORDER_ROWS', Value: String(o) }, { Key: 'DB_MAX_RESULT_ROWS', Value: String(r) }] }, ctx);
+    return YearDb.limits();
   },
 
   /** Tạo Google Sheet DB mới (năm mới hoặc DB nối tiếp khi đầy). p: { Year } */
@@ -2967,6 +3215,13 @@ var AdminService = {
     var mode = DB_MODE[String(p.Mode || 'RW').toUpperCase()] || DB_MODE.RW;
     var test = AdminService.testYearDb({ SpreadsheetId: id });
     if (!test.ok) throw new AppError('DB_UNAVAILABLE', test.error);
+    // Tên = tên file Google Sheet thật: nhập tên mới → đổi tên file trên Drive; để trống → giữ tên file hiện tại
+    var name = String(p.Note || '').trim() || test.name;
+    if (name.length > 100) throw new AppError('VALIDATION', 'Tên file tối đa 100 ký tự');
+    if (name !== test.name) {
+      try { SpreadsheetApp.openById(id).rename(name); }
+      catch (e) { throw new AppError('DB_UNAVAILABLE', 'Không đổi được tên file Google Sheet: ' + e.message + '. Cần quyền Editor trên file.'); }
+    }
     return withLock_(function () {
       var cur = Db.findOne(T.YEAR_DBS, null, 'SpreadsheetId', id);
       if (mode === DB_MODE.RW) {   // mỗi năm chỉ 1 DB nhận phiếu mới
@@ -2974,7 +3229,7 @@ var AdminService = {
           if (Number(r.Year) === year && String(r.SpreadsheetId) !== id && String(r.Mode).toUpperCase() === DB_MODE.RW) Db.updateRow(T.YEAR_DBS, null, r._row, { Mode: DB_MODE.FULL });
         });
       }
-      var row = { Year: year, SpreadsheetId: id, Mode: mode, Note: p.Note || ('DB_' + year) };
+      var row = { Year: year, SpreadsheetId: id, Mode: mode, Note: name };
       if (cur) Db.updateRow(T.YEAR_DBS, null, cur._row, row); else Db.insert(T.YEAR_DBS, null, [row]);
       YearDb.invalidate();
       if (mode !== DB_MODE.RO) {
@@ -3059,6 +3314,9 @@ var AdminService = {
 
   clearCache: function () {
     [CACHE.CATALOG, CACHE.SETTINGS, CACHE.ROLES, CACHE.YEAR_DBS].forEach(function (k) { CacheUtil.remove(k); });
+    Settings._memo = null;
+    Db.bumpHeaderVersion();          // bỏ cache tiêu đề cột (khi đã sửa cột trực tiếp trên Google Sheet)
+    CacheUtil.remove(PatientService.INDEX_KEY);
     return true;
   }
 };
@@ -3314,6 +3572,9 @@ function setup() {
     { Key: 'FOLLOWUP_PRESETS', Value: '7,14,30,90,180', Description: 'Gợi ý số ngày tái khám' },
     { Key: 'SESSION_HOURS', Value: '6', Description: 'Thời hạn phiên đăng nhập (giờ, tối đa 6)' }
   ]);
+  addSettingIfMissing_('DB_MAX_ORDER_ROWS', String(CAPACITY.DEFAULT_MAX_ORDER_ROWS), 'Số phiếu tối đa / DB năm trước khi tự tạo DB nối tiếp (0 = không giới hạn)');
+  addSettingIfMissing_('DB_MAX_RESULT_ROWS', String(CAPACITY.DEFAULT_MAX_RESULT_ROWS), 'Số dòng kết quả tối đa / DB năm trước khi tự tạo DB nối tiếp (0 = không giới hạn)');
+  addSettingIfMissing_('DEFAULT_WARD', 'Phường Pleiku', 'Phường/Xã mặc định khi thêm bệnh nhân mới (thuộc tỉnh đầu tiên trong danh sách Tỉnh)');
   addSettingIfMissing_('PRINT_FONT', 'Be Vietnam Pro', 'Font chữ phiếu kết quả: Be Vietnam Pro | Arial | Roboto | Noto Sans | Times New Roman');
   addSettingIfMissing_('LOGIN_BG_URL', '', 'Ảnh nền màn hình đăng nhập (URL ảnh công khai). Trống = ảnh mặc định');
   addSettingIfMissing_('LOGIN_BG_DIM', '0.35', 'Độ tối lớp phủ ảnh nền đăng nhập: 0 (không phủ) – 0.8');
@@ -3381,7 +3642,7 @@ function setup() {
 var SEED_WARDS_GIA_LAI = 'Phường Quy Nhơn|Phường Quy Nhơn Đông|Phường Quy Nhơn Tây|Phường Quy Nhơn Nam|Phường Quy Nhơn Bắc|Phường Bình Định|Phường An Nhơn|Phường An Nhơn Đông|Phường An Nhơn Nam|Phường An Nhơn Bắc|Phường Bồng Sơn|Phường Hoài Nhơn|Phường Tam Quan|Phường Hoài Nhơn Đông|Phường Hoài Nhơn Tây|Phường Hoài Nhơn Nam|Phường Hoài Nhơn Bắc|Phường Pleiku|Phường Hội Phú|Phường Thống Nhất|Phường Diên Hồng|Phường An Phú|Phường An Khê|Phường An Bình|Phường Ayun Pa|Xã An Nhơn Tây|Xã Phù Cát|Xã Xuân An|Xã Ngô Mây|Xã Cát Tiến|Xã Đề Gi|Xã Hòa Hội|Xã Hội Sơn|Xã Phù Mỹ|Xã An Lương|Xã Bình Dương|Xã Phù Mỹ Đông|Xã Phù Mỹ Tây|Xã Phù Mỹ Nam|Xã Phù Mỹ Bắc|Xã Tuy Phước|Xã Tuy Phước Đông|Xã Tuy Phước Tây|Xã Tuy Phước Bắc|Xã Tây Sơn|Xã Bình Khê|Xã Bình Phú|Xã Bình Hiệp|Xã Bình An|Xã Hoài Ân|Xã Ân Tường|Xã Kim Sơn|Xã Vạn Đức|Xã Ân Hảo|Xã Vân Canh|Xã Canh Vinh|Xã Canh Liên|Xã Vĩnh Thạnh|Xã Vĩnh Thịnh|Xã Vĩnh Quang|Xã Vĩnh Sơn|Xã An Hòa|Xã An Lão|Xã An Vinh|Xã An Toàn|Xã Biển Hồ|Xã Gào|Xã Ia Ly|Xã Chư Păh|Xã Ia Khươl|Xã Ia Phí|Xã Chư Prông|Xã Bàu Cạn|Xã Ia Boòng|Xã Ia Lâu|Xã Ia Pia|Xã Ia Tôr|Xã Chư Sê|Xã Bờ Ngoong|Xã Ia Ko|Xã Al Bá|Xã Chư Pưh|Xã Ia Le|Xã Ia Hrú|Xã Cửu An|Xã Đak Pơ|Xã Ya Hội|Xã Kbang|Xã Kông Bơ La|Xã Tơ Tung|Xã Sơn Lang|Xã Đak Rong|Xã Kông Chro|Xã Ya Ma|Xã Chư Krey|Xã SRó|Xã Đăk Song|Xã Chơ Long|Xã Ia Rbol|Xã Ia Sao|Xã Phú Thiện|Xã Chư A Thai|Xã Ia Hiao|Xã Pờ Tó|Xã Ia Pa|Xã Ia Tul|Xã Phú Túc|Xã Ia Dreh|Xã Ia Rsai|Xã Uar|Xã Đak Đoa|Xã Kon Gang|Xã Ia Băng|Xã KDang|Xã Đak Sơmei|Xã Mang Yang|Xã Lơ Pang|Xã Kon Chiêng|Xã Hra|Xã Ayun|Xã Ia Grai|Xã Ia Krái|Xã Ia Hrung|Xã Đức Cơ|Xã Ia Dơk|Xã Ia Krêl|Xã Ia O|Xã Nhơn Châu|Xã Ia Púch|Xã Ia Mơ|Xã Ia Pnôn|Xã Ia Nan|Xã Ia Dom|Xã Ia Chia|Xã Krong';
 
 function addSettingIfMissing_(key, value, desc) {
-  if (!Db.findOne(T.SETTINGS, null, 'Key', key)) Db.insert(T.SETTINGS, null, [{ Key: key, Value: value, Description: desc }]);
+  if (!Db.findOne(T.SETTINGS, null, 'Key', key)) { Db.insert(T.SETTINGS, null, [{ Key: key, Value: value, Description: desc }]); Settings.invalidate(); }
 }
 
 /**
@@ -3401,12 +3662,13 @@ function warmup() {
     PatientService.index({});
     var y = new Date().getFullYear();
     var act = YearDb.active(y);
-    if (act) Db.readAll(T.ORDERS, act.SpreadsheetId);
+    if (act) { Db.readAll(T.ORDERS, act.SpreadsheetId); Db.readAll(T.ORDER_PANELS, act.SpreadsheetId); }   // tra cứu/mở phiếu lọc trong bộ nhớ
   } catch (e) { console.warn('warmup: ' + e.message); }
 }
 
 function maintenance() {
   withLock_(function () {
+    try { Sequence.syncToSheet(); } catch (e) { console.warn('sequence sync: ' + e.message); }
     // Cắt gọn cột/dòng trống trước khi đo (giữ dung lượng thực, tránh tạo DB nối tiếp sớm)
     Db.coreIds().concat(YearDb.allIds()).forEach(function (id) { try { Db.optimize(id); } catch (e) { console.warn('optimize ' + id + ': ' + e.message); } });
     var list = YearDb.refreshCapacity();
@@ -3414,7 +3676,7 @@ function maintenance() {
     if (!auto) return;
     var now = new Date(), y = now.getFullYear();
     // DB đang ghi vượt ngưỡng → tạo DB nối tiếp
-    list.filter(function (r) { return r.Mode === DB_MODE.RW && r.UsedCells / CAPACITY.MAX_CELLS * 100 >= CAPACITY.ROLLOVER_PERCENT; })
+    list.filter(function (r) { return r.Mode === DB_MODE.RW && YearDb.isFull(r); })
       .forEach(function (r) { YearDb.create(r.Year, 'system'); });
     // Từ 15/12: tạo sẵn DB năm sau
     if (now.getMonth() === 11 && now.getDate() >= 15 && !YearDb.forYear(y + 1).length) YearDb.create(y + 1, 'system');
@@ -3423,6 +3685,7 @@ function maintenance() {
 
 function seedIfEmpty_(table, rows) {
   if (Db.readAll(table).length === 0 && rows.length) Db.insert(table, null, rows);
+  if (table === T.SETTINGS) Settings.invalidate();
 }
 
 /** Đồng bộ bộ đếm sau khi import dữ liệu cũ (BN-xxxxxx & XN-YYMMDD-NNN). */

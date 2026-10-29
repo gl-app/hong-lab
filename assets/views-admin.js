@@ -372,7 +372,7 @@
     ({ general: general, users: users, roles: roles, catalog: catalog, doctors: doctors, wards: wards, years: years, system: system })[tab](body);
   };
 
-  var HIDDEN_SETTINGS = ['CLINIC_LOGO_DATA', 'CLINIC_LOGO_FILE_ID', 'CLINIC_WATERMARK_FILE_ID', 'WATERMARK_ENABLED', 'WATERMARK_OPACITY'];
+  var HIDDEN_SETTINGS = ['CLINIC_LOGO_DATA', 'CLINIC_LOGO_FILE_ID', 'CLINIC_WATERMARK_FILE_ID', 'WATERMARK_ENABLED', 'WATERMARK_OPACITY', 'DB_MAX_ORDER_ROWS', 'DB_MAX_RESULT_ROWS'];   // chỉnh ở tab riêng
 
   /** Đọc file ảnh → Image. */
   function loadImage(file) {
@@ -717,29 +717,42 @@
       return '<div class="d-flex align-items-center gap-2" style="min-width:150px"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" style="width:' + Math.min(100, pct) + '%;background:' + c + '"></div></div>' +
         '<span class="small tabular" style="width:46px">' + pct + '%</span></div>';
     }
+    var lim = { orders: 20000, results: 150000 };
+    /** Số dòng so với ngưỡng: xanh < 80%, cam ≥ 80%, đỏ ≥ 100%. */
+    function rowsLine(label, n, max) {
+      var pct = max ? n / max * 100 : 0;
+      var cls = !max ? 'text-muted' : (pct >= 100 ? 'text-danger fw-semibold' : (pct >= 80 ? 'text-warning fw-semibold' : 'text-muted'));
+      return '<div class="small tabular ' + cls + '">' + label + ': ' + U.num(n) + (max ? ' / ' + U.num(max) + ' (' + Math.round(pct) + '%)' : '') + '</div>';
+    }
     function render(list) {
       var thisYear = new Date().getFullYear();
       body.innerHTML = '<div class="row g-3"><div class="col-xl-8"><div class="card"><div class="card-header justify-content-between flex-wrap gap-2"><span>Google Sheet dữ liệu theo năm</span><div class="d-flex gap-2">' +
         '<button class="btn btn-sm btn-light" id="y-cap"><i class="bi bi-speedometer2"></i> Đo dung lượng</button>' +
         '<button class="btn btn-sm btn-light" id="y-opt" title="Xóa cột/dòng trống thừa ở mọi bảng: Config, Customers, các DB năm"><i class="bi bi-scissors"></i> Tối ưu dung lượng</button>' +
         '<button class="btn btn-sm btn-primary" id="y-create"><i class="bi bi-plus-lg"></i> Tạo DB mới</button></div></div>' +
-        '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Số dòng / ngưỡng</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
         list.map(function (y) {
           return '<tr><td class="fw-bold">' + y.Year + '</td><td><a class="small" href="https://docs.google.com/spreadsheets/d/' + esc(y.SpreadsheetId) + '" target="_blank" rel="noopener">' + esc(y.Note || y.SpreadsheetId.substring(0, 12)) + ' <i class="bi bi-box-arrow-up-right"></i></a></td>' +
             '<td>' + (modeLabel[y.Mode] || esc(y.Mode)) + '</td><td>' + bar(y.UsedPercent || 0) + '<div class="small text-muted tabular">' + U.num(y.UsedCells) + ' ô</div></td>' +
+            '<td>' + rowsLine('Phiếu', y.OrderRows || 0, lim.orders) + rowsLine('Kết quả', y.ResultRows || 0, lim.results) + '</td>' +
             '<td class="small text-muted">' + U.vnDateTime(y.CheckedAt) + '</td><td><button class="btn btn-sm btn-light" data-yedit="' + esc(y.SpreadsheetId) + '"><i class="bi bi-pencil"></i></button></td></tr>';
         }).join('') + '</tbody></table></div></div>' +
         '<div class="alert alert-light border small mt-3 mb-0"><b>Cách hệ thống xử lý:</b><ul class="mb-0 ps-3">' +
           '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê tự gộp mọi DB của các năm liên quan.</li>' +
           '<li><b>Sang năm mới:</b> phiếu đầu tiên của năm tự tạo <span class="kbd">DB_' + (thisYear + 1) + '</span> (cùng thư mục Drive với DB cũ). Từ 15/12 hệ thống tạo sẵn DB năm sau. DB năm cũ giữ nguyên.</li>' +
-          '<li><b>DB đầy:</b> cảnh báo ở 70%; đạt 85% tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>), DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
+          '<li><b>DB đầy:</b> khi DB đang ghi chạm <b>ngưỡng số dòng</b> (Phiếu hoặc Kết quả, chỉnh bên phải) hoặc 85% dung lượng ô, hệ thống tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>); DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
           '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li>' +
           '<li><b>Tối ưu dung lượng:</b> xóa cột trống bên phải và dòng trống dư (giữ 200 dòng) ở mọi bảng. Hệ thống tự chạy lúc 01:00 hằng đêm; bấm nút để chạy ngay.</li></ul></div></div>' +
-        '<div class="col-xl-4"><div class="card"><div class="card-header" id="y-title">Kết nối Sheet có sẵn</div><div class="card-body"><form id="y-form" class="row g-2">' +
+        '<div class="col-xl-4"><div class="card mb-3"><div class="card-header"><i class="bi bi-sliders"></i> Ngưỡng tạo DB nối tiếp</div><div class="card-body"><form id="yl-form" class="row g-2">' +
+          '<div class="col-6"><label class="form-label" for="yl-o">Số phiếu tối đa</label><input class="form-control tabular" id="yl-o" name="orders" inputmode="numeric" value="' + lim.orders + '"></div>' +
+          '<div class="col-6"><label class="form-label" for="yl-r">Số dòng kết quả tối đa</label><input class="form-control tabular" id="yl-r" name="results" inputmode="numeric" value="' + lim.results + '"></div>' +
+          '<div class="col-12 form-text">Mỗi phiếu ~8–10 dòng kết quả nên <b>Results</b> thường chạm ngưỡng trước. Ngưỡng vừa phải giúp tra cứu, in, thống kê luôn nhanh. Nhập <b>0</b> = không giới hạn theo dòng (chỉ dựa trên 85% dung lượng ô).</div>' +
+          '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary btn-sm" id="yl-save"><i class="bi bi-save"></i> Lưu ngưỡng</button></div></div>' +
+        '<div class="card"><div class="card-header" id="y-title">Kết nối Sheet có sẵn</div><div class="card-body"><form id="y-form" class="row g-2">' +
         '<div class="col-4"><label class="form-label">Năm</label><input class="form-control" name="Year" required inputmode="numeric" value="' + thisYear + '"></div>' +
         '<div class="col-8"><label class="form-label">Trạng thái</label><select class="form-select" name="Mode"><option value="RW">Đang ghi</option><option value="FULL">Đầy – chỉ sửa</option><option value="RO">Khóa sổ (chỉ đọc)</option></select></div>' +
         '<div class="col-12"><label class="form-label">Link hoặc ID Google Sheet</label><input class="form-control mono" name="SpreadsheetId" required placeholder="https://docs.google.com/spreadsheets/d/…"></div>' +
-        '<div class="col-12"><label class="form-label">Tên hiển thị</label><input class="form-control" name="Note" placeholder="DB_' + thisYear + '"></div></form>' +
+        '<div class="col-12"><label class="form-label">Tên file Google Sheet</label><input class="form-control" name="Note" maxlength="100" placeholder="DB_' + thisYear + '"><div class="form-text">Sửa tên ở đây sẽ đổi tên file trên Google Drive. Để trống = giữ tên file hiện tại.</div></div></form>' +
         '<div id="y-test" class="small mt-2"></div></div><div class="card-footer bg-white d-flex gap-2 justify-content-end"><button class="btn btn-light" id="y-check"><i class="bi bi-plug"></i> Kiểm tra</button><button class="btn btn-primary" id="y-save">Lưu</button></div></div>' +
         '<div class="small text-muted mt-2">Dùng khi bạn tự tạo Sheet. Chia sẻ quyền <b>Editor</b> cho tài khoản deploy Web App. Muốn hệ thống tự tạo file, bấm "Tạo DB mới".</div></div></div>';
       var form = U.$('#y-form', body);
@@ -758,6 +771,10 @@
         if (!form.reportValidity()) return;
         U.api('admin.years.save', U.formData(form)).then(function (l) { U.toast('Đã lưu kết nối'); render(l); }).catch(function () {});
       };
+      U.$('#yl-save', body).onclick = function () {
+        var num = function (id) { return Number(String(U.$(id, body).value).replace(/[^\d]/g, '') || 0); };
+        U.api('admin.years.limits', { orders: num('#yl-o'), results: num('#yl-r') }).then(function (l) { lim = l; U.toast('Đã lưu ngưỡng tạo DB nối tiếp'); render(list); }).catch(function () {});
+      };
       U.$('#y-cap', body).onclick = function () { U.api('admin.years.capacity').then(function (l) { U.toast('Đã cập nhật dung lượng'); render(l); }).catch(function () {}); };
       U.$('#y-opt', body).onclick = function () {
         var btn = this;
@@ -765,9 +782,22 @@
           if (!ok) return;
           btn.disabled = true;
           U.api('admin.years.optimize').then(function (r) {
-            var errs = r.results.filter(function (x) { return x.error; });
-            U.toast('Đã giải phóng ' + U.num(r.freed) + ' ô trên ' + r.results.length + ' file' + (errs.length ? ' · ' + errs.length + ' file lỗi' : ''), errs.length ? 'warn' : undefined);
             render(r.list);
+            // Báo cáo chi tiết từng file / từng sheet
+            var rowsHtml = r.results.map(function (f) {
+              var sh = f.sheets || [];
+              return '<tr class="table-light"><td colspan="4"><b>' + esc(f.name || f.id) + '</b> <span class="text-muted small">· giải phóng ' + U.num(f.freed || 0) + ' ô</span>' +
+                (f.error && !sh.length ? '<div class="text-danger small">' + esc(f.error) + '</div>' : '') + '</td></tr>' +
+                sh.map(function (x) {
+                  return '<tr><td class="ps-4 mono small">' + esc(x.sheet) + '</td><td class="small tabular">' + U.num(x.rows) + ' × ' + U.num(x.cols) + '</td>' +
+                    '<td class="small tabular">' + U.num(x.rowsAfter) + ' × ' + U.num(x.colsAfter) + '</td>' +
+                    '<td class="small">' + (x.error ? '<span class="text-danger">Lỗi: ' + esc(x.error) + '</span>' : (x.freed ? '<span class="text-success">−' + U.num(x.freed) + ' ô</span>' : '<span class="text-muted">Đã gọn</span>')) + '</td></tr>';
+                }).join('');
+            }).join('');
+            U.modal('<div class="modal-header"><h5 class="modal-title">Kết quả tối ưu dung lượng</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
+              '<div class="modal-body"><div class="mb-2">Tổng cộng giải phóng <b>' + U.num(r.freed) + '</b> ô trên ' + r.results.length + ' file.</div>' +
+              '<div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table table-sm align-middle mb-0"><thead><tr><th>Sheet</th><th>Trước (dòng × cột)</th><th>Sau</th><th>Kết quả</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div></div>' +
+              '<div class="modal-footer"><button class="btn btn-primary" data-bs-dismiss="modal">Đóng</button></div>', { size: 'lg' });
           }).catch(function () {}).finally(function () { btn.disabled = false; });
         });
       };
@@ -778,7 +808,7 @@
         });
       };
     }
-    U.api('admin.years.list').then(render).catch(function () {});
+    Promise.all([U.api('admin.years.list'), U.api('admin.years.limits')]).then(function (r) { lim = r[1]; render(r[0]); }).catch(function () {});
   }
 
   function system(body) {

@@ -184,14 +184,25 @@
     this.data.splice(start - 1, n);
     this.mr = mr; STORE.dirty = true;
   };
-  Sheet.prototype.getRange = function (r, c, nr, nc) { return new Range(this, r, c, nr, nc); };
+  Sheet.prototype.getRange = function (r, c, nr, nc) {
+    if (typeof r === 'string') {   // A1: "C2:C", "B3", "A1:D10"
+      var m = r.toUpperCase().match(/^([A-Z]+)(\d+)?(?::([A-Z]+)(\d+)?)?$/);
+      if (!m) throw new Error('Range not found: ' + r);
+      var cn = function (L) { var n = 0; for (var i = 0; i < L.length; i++) n = n * 26 + (L.charCodeAt(i) - 64); return n; };
+      var c1 = cn(m[1]), r1 = m[2] ? +m[2] : 1, c2 = m[3] ? cn(m[3]) : c1;
+      var r2 = m[4] ? +m[4] : (m[3] ? Math.max(r1, this.getMaxRows()) : r1);
+      return new Range(this, r1, c1, r2 - r1 + 1, c2 - c1 + 1);
+    }
+    return new Range(this, r, c, nr, nc);
+  };
   Sheet.prototype.deleteRow = function (r) { this.data.splice(r - 1, 1); STORE.dirty = true; };
   Sheet.prototype.insertRowsAfter = function (after, n) { this.mr = this.getMaxRows() + n; return this; };
   Sheet.prototype.setFrozenRows = function () { return this; };
 
   function Spreadsheet(id) { this.id = id; this.sheets = {}; this.order = []; }
   Spreadsheet.prototype.getId = function () { return this.id; };
-  Spreadsheet.prototype.getName = function () { return 'DEMO_' + this.id.substring(0, 6); };
+  Spreadsheet.prototype.getName = function () { return this.title || ('DEMO_' + this.id.substring(0, 6)); };
+  Spreadsheet.prototype.rename = function (n) { this.title = String(n); STORE.dirty = true; return this; };
   Spreadsheet.prototype.getUrl = function () { return 'https://docs.google.com/spreadsheets/d/' + this.id; };
   Spreadsheet.prototype.getSheetByName = function (n) { return this.sheets[n] || null; };
   Spreadsheet.prototype.insertSheet = function (n) { var s = new Sheet(this, n); this.sheets[n] = s; this.order.push(n); STORE.dirty = true; return s; };
@@ -246,7 +257,8 @@
   global.CacheService = { getScriptCache: function () { return scriptCache; } };
   global.LockService = { getScriptLock: function () { return { tryLock: function () { return true; }, waitLock: function () {}, releaseLock: function () {} }; } };
   global.PropertiesService = { getScriptProperties: function () {
-    return { getProperty: function (k) { return props[k] || null; }, setProperty: function (k, v) { props[k] = String(v); } };
+    return { getProperty: function (k) { return props.hasOwnProperty(k) ? props[k] : null; }, setProperty: function (k, v) { props[k] = String(v); STORE.dirty = true; return this; },
+             getProperties: function () { return Object.assign({}, props); }, deleteProperty: function (k) { delete props[k]; return this; } };
   } };
   global.ContentService = {
     MimeType: { JSON: 'JSON' },
@@ -260,7 +272,7 @@
       var o = { props: props, ss: {} };
       Object.keys(STORE.spreadsheets).forEach(function (id) {
         var s = STORE.spreadsheets[id];
-        o.ss[id] = { order: s.order, sheets: {} };
+        o.ss[id] = { order: s.order, sheets: {}, title: s.title || '' };
         s.order.forEach(function (n) { o.ss[id].sheets[n] = s.sheets[n].data; (o.ss[id].grid = o.ss[id].grid || {})[n] = [s.sheets[n].mr || 0, s.sheets[n].mc || 0]; });
       });
       return o;
@@ -269,6 +281,7 @@
       Object.keys(o.props || {}).forEach(function (k) { props[k] = o.props[k]; });
       Object.keys(o.ss || {}).forEach(function (id) {
         var s = SpreadsheetApp.openById(id);
+        if (o.ss[id].title) s.title = o.ss[id].title;
         (o.ss[id].order || []).forEach(function (n) { var sh = s.getSheetByName(n) || s.insertSheet(n); sh.data = o.ss[id].sheets[n] || []; var g = (o.ss[id].grid || {})[n]; if (g) { sh.mr = g[0] || null; sh.mc = g[1] || null; } });
       });
     },

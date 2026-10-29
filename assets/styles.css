@@ -42,7 +42,16 @@ a { color: var(--brand); }
 
 /* ------------------------------------------------ Login (v1.5 – ảnh nền toàn màn hình + thẻ đăng nhập) */
 #login-view { position: relative; min-height: 100vh; display: flex; flex-direction: column; background: #0b3b48; overflow: hidden; }
-.login-bg { position: absolute; inset: 0; background: #0b3b48 url("login-bg.webp") center bottom / cover no-repeat; }
+.login-bg { position: absolute; inset: 0; background: #b6b9ba; overflow: hidden; }   /* màu trơn lấy theo tông mép ảnh */
+/* Ảnh luôn hiện trọn chiều cao, đúng tỉ lệ (không phóng to vỡ hạt); màn rộng → 2 bên là màu nền, mép ảnh mờ dần cho liền mạch */
+.login-bg-img { position: absolute; top: 0; bottom: 0; left: 50%; height: 100%; aspect-ratio: 2100 / 1572; transform: translateX(-50%);
+  background: url("login-bg.webp") center / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%); }
+/* Màn hẹp hơn tỉ lệ ảnh (không còn khoảng trống 2 bên): bỏ mờ mép, neo phải để giữ trọn khẩu hiệu "Chuẩn xác · Tin cậy · Nhanh chóng" */
+@media (min-width: 641px) and (max-aspect-ratio: 2100/1572) {
+  .login-bg-img { left: auto; right: 0; transform: none; -webkit-mask-image: none; mask-image: none; }
+}
 .login-dim { position: absolute; inset: 0; background: rgb(11, 59, 72); opacity: .35; }
 .login-top { position: relative; z-index: 1; display: flex; align-items: center; padding: 22px 48px; }
 .login-brand { display: flex; align-items: center; gap: 12px; color: #fff; }
@@ -83,7 +92,8 @@ a { color: var(--brand); }
 /* Điện thoại: ảnh thành băng trên cùng, thẻ đăng nhập trượt lên che một phần ảnh */
 @media (max-width: 640px) {
   #login-view { display: block; background: #fff; }
-  .login-bg { bottom: auto; height: 300px; background-position: 22% 30%; }
+  .login-bg { bottom: auto; height: 300px; }
+  .login-bg-img { inset: 0; left: 0; width: 100%; height: 100%; aspect-ratio: auto; transform: none; background-position: 22% 30%; -webkit-mask-image: none; mask-image: none; }
   .login-dim { display: none; }
   .login-top { position: absolute; left: 16px; top: 16px; padding: 0; }
   .login-brand { background: rgba(255, 255, 255, .94); padding: 6px 14px 6px 6px; border-radius: 999px; box-shadow: 0 4px 12px rgba(6, 30, 38, .18); color: var(--brand); }

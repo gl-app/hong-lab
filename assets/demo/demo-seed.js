@@ -9,6 +9,8 @@
   global.DemoSeed = {
     run: function () {
       var ctx = { username: 'admin', fullName: 'Quản trị', role: 'ADMIN', perms: ['*'] };
+      YearDb.all().forEach(function (y) { SpreadsheetApp.openById(y.SpreadsheetId).rename('DB_' + y.Year); });   // bản giả lập không có tên file thật
+      YearDb.refreshCapacity();
       // Demo users
       [['bacsi', 'BS. Demo', 'DOCTOR'], ['ktv', 'KTV Demo', 'TECH'], ['letan', 'Lễ tân Demo', 'RECEPTION']].forEach(function (u) {
         AdminService.saveUser({ Username: u[0], FullName: u[1], RoleCode: u[2], Password: 'demo123' }, ctx);
