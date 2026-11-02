@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '1.7.0',
+  VERSION: '2.0.0',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -54,6 +54,7 @@ var T = {
   WARDS: 'Wards',
   SEQUENCES: 'Sequences',
   SYS_LOG: 'SystemLog',           // đăng nhập, cấu hình, quản trị
+  DISCOUNTS: 'DiscountRules',     // quy tắc chiết khấu tự động
   // PATIENT DB
   PATIENTS: 'Patients',
   // YEAR DB
@@ -82,13 +83,14 @@ SCHEMA[T.SEQUENCES]   = ['SeqKey', 'LastValue', 'UpdatedAt'];
 SCHEMA[T.SYS_LOG]     = ['Timestamp', 'Username', 'Action', 'Entity', 'EntityID', 'Detail'];
 
 SCHEMA[T.PATIENTS]    = ['PatientID', 'FullName', 'SearchName', 'Gender', 'BirthYear', 'Phone', 'Address',
-                         'Ward', 'Province', 'Note', 'IsActive', 'CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy'];
+                         'Ward', 'Province', 'Note', 'IsActive', 'CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy', 'Tier'];
+SCHEMA[T.DISCOUNTS]   = ['RuleID', 'Kind', 'Tier', 'PanelCode', 'Mode', 'Value', 'FromDate', 'ToDate', 'IsActive', 'Note', 'UpdatedAt', 'UpdatedBy'];
 
 SCHEMA[T.ORDERS]      = ['OrderID', 'OrderDate', 'PatientID', 'PatientName', 'Gender', 'Age', 'Phone', 'Address',
                          'DoctorName', 'PanelCodes', 'GrossAmount', 'Discount', 'NetAmount', 'PaymentStatus',
                          'Status', 'FollowUpDays', 'FollowUpDate', 'FollowUpStatus', 'Note', 'LegacyCode',
                          'CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy', 'Version',
-                         'AssignedTo', 'FirstResultAt', 'CompletedAt'];
+                         'AssignedTo', 'FirstResultAt', 'CompletedAt', 'DiscountDetail', 'DiscountMode'];
 SCHEMA[T.ORDER_PANELS]= ['OrderID', 'PanelCode', 'TestCodes', 'Amount', 'ResultStatus', 'PrintCount', 'LastPrintedAt'];
 SCHEMA[T.RESULTS]     = ['OrderID', 'PatientID', 'OrderDate', 'PanelCode', 'TestCode', 'Value', 'NumValue',
                          'Unit', 'RefText', 'Flag', 'EnteredAt', 'EnteredBy'];
@@ -97,7 +99,7 @@ SCHEMA[T.AUDIT]       = ['Timestamp', 'Username', 'Action', 'Entity', 'EntityID'
 /** Which DB each table lives in. */
 var TABLE_DB = {};
 [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS,
- T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG].forEach(function (t) { TABLE_DB[t] = 'CONFIG'; });
+ T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG, T.DISCOUNTS].forEach(function (t) { TABLE_DB[t] = 'CONFIG'; });
 TABLE_DB[T.PATIENTS] = 'PATIENT';
 [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { TABLE_DB[t] = 'YEAR'; });
 
@@ -133,9 +135,17 @@ var PERM = {
   REPORT_EXPORT: 'report.export',   // Xuất Excel báo cáo tổng (toàn bộ phiếu, có doanh thu)
   WORK_EXPORT: 'work.export',       // Xuất danh sách phiếu mình phụ trách (không có số tiền)
   AUDIT_VIEW: 'audit.view',         // Xem nhật ký hệ thống
-  ADMIN_USERS: 'admin.users',       // Quản lý tài khoản & vai trò
-  ADMIN_CONFIG: 'admin.config'      // Cấu hình hệ thống, danh mục, kết nối DB năm
+  ADMIN_CATALOG: 'admin.catalog',   // Danh mục XN (tên, đơn vị, khoảng tham chiếu, thành phần nhóm, mẫu in)
+  ADMIN_PRICE: 'admin.price',       // Bảng giá & quy tắc chiết khấu tự động
+  ADMIN_DOCTORS: 'admin.doctors',   // Danh sách bác sĩ chỉ định
+  ADMIN_WARDS: 'admin.wards',       // Danh mục phường / xã
+  // Chỉ Quản trị hệ thống (vai trò '*'): cấu hình chung, tài khoản, vai trò, kết nối DB năm, hệ thống – không gán được cho vai trò khác
+  SYS_ADMIN: '*',
+  ADMIN_USERS: '*',
+  ADMIN_CONFIG: '*'
 };
+/** Hạng bệnh nhân (chiết khấu tái khám theo hạng). */
+var TIERS = { NORMAL: 'Thường', VIP: 'VIP', VVIP: 'VVIP' };
 
 /** Menu → permission map (FE uses it to render navigation). */
 var MENU = [
@@ -145,7 +155,7 @@ var MENU = [
   { key: 'followup', label: 'Cảnh báo tái khám', icon: 'bi-bell', perm: PERM.FOLLOWUP_VIEW },
   { key: 'report', label: 'Thống kê', icon: 'bi-graph-up', perm: PERM.REPORT_REVENUE },
   { key: 'audit', label: 'Nhật ký hệ thống', icon: 'bi-journal-text', perm: PERM.AUDIT_VIEW },
-  { key: 'admin', label: 'Quản trị', icon: 'bi-gear', perm: PERM.ADMIN_CONFIG + '|' + PERM.ADMIN_USERS }
+  { key: 'admin', label: 'Quản trị', icon: 'bi-gear', perm: [PERM.SYS_ADMIN, PERM.ADMIN_CATALOG, PERM.ADMIN_PRICE, PERM.ADMIN_DOCTORS, PERM.ADMIN_WARDS].join('|') }
 ];
 
 /** Cache keys / TTL (seconds). */
@@ -254,11 +264,16 @@ var ROUTES = {
   'admin.years.limits':    { fn: function (p, c) { return p && p.orders !== undefined ? AdminService.saveYearLimits(p, c) : YearDb.limits(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.create':    { fn: function (p, c) { return AdminService.createYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.capacity':  { fn: function () { return AdminService.refreshCapacity(); }, perm: PERM.ADMIN_CONFIG },
-  'admin.wards.save':      { fn: function (p, c) { return AdminService.saveWards(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.wards.save':      { fn: function (p, c) { return AdminService.saveWards(p, c); }, perm: PERM.ADMIN_WARDS },
   'admin.years.test':      { fn: function (p) { return AdminService.testYearDb(p); }, perm: PERM.ADMIN_CONFIG },
-  'admin.catalog.saveTest':  { fn: function (p, c) { return AdminService.saveTest(p, c); }, perm: PERM.ADMIN_CONFIG },
-  'admin.catalog.savePanel': { fn: function (p, c) { return AdminService.savePanel(p, c); }, perm: PERM.ADMIN_CONFIG },
-  'admin.doctors.save':    { fn: function (p, c) { return AdminService.saveDoctor(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.catalog.saveTest':  { fn: function (p, c) { return AdminService.saveTest(p, c); }, perm: PERM.ADMIN_CATALOG },
+  'admin.catalog.savePanel': { fn: function (p, c) { return AdminService.savePanel(p, c); }, perm: PERM.ADMIN_CATALOG },
+  'admin.price.save':      { fn: function (p, c) { return AdminService.savePrices(p, c); }, perm: PERM.ADMIN_PRICE },
+  'admin.discount.list':   { fn: function () { return Discount.adminList(); }, perm: PERM.ADMIN_PRICE },
+  'admin.discount.save':   { fn: function (p, c) { return Discount.saveRule(p, c); }, perm: PERM.ADMIN_PRICE },
+  'admin.discount.delete': { fn: function (p, c) { return Discount.deleteRule(p, c); }, perm: PERM.ADMIN_PRICE },
+  'admin.discount.settings': { fn: function (p, c) { return Discount.saveSettings(p, c); }, perm: PERM.ADMIN_PRICE },
+  'admin.doctors.save':    { fn: function (p, c) { return AdminService.saveDoctor(p, c); }, perm: PERM.ADMIN_DOCTORS },
   'admin.cache.clear':     { fn: function () { return AdminService.clearCache(); }, perm: PERM.ADMIN_CONFIG }
 };
 
@@ -279,6 +294,23 @@ ROUTES['sys.batch'] = { fn: function (p, ctx) {
   });
 } };
 
+/** Các thao tác FE được phép ghi ngầm (đều là "đặt giá trị", gửi lại không làm sai dữ liệu). */
+var IDEMPOTENT = { 'order.saveResults': true, 'order.update': true };
+var Idem = {
+  TTL: 21600,
+  key_: function (ctx, k) { return 'idem_' + (ctx ? ctx.username : '') + '_' + String(k).substring(0, 80); },
+  get: function (ctx, k) {
+    var v = CacheService.getScriptCache().get(Idem.key_(ctx, k));
+    if (!v) return null;
+    try { return JSON.parse(v); } catch (e) { return null; }
+  },
+  put: function (ctx, k, data) {
+    var s = JSON.stringify(data);
+    if (s.length > 90000) s = JSON.stringify({ duplicate: true });   // quá lớn cho CacheService → chỉ đánh dấu đã xử lý
+    try { CacheService.getScriptCache().put(Idem.key_(ctx, k), s, Idem.TTL); } catch (e) { /* bỏ qua */ }
+  }
+};
+
 function doPost(e) {
   var started = Date.now();
   var req = {};
@@ -294,7 +326,12 @@ function doPost(e) {
         throw new AppError('FORBIDDEN', 'Tài khoản không có quyền thực hiện chức năng này.');
       }
     }
-    var data = route.fn(req.payload || {}, ctx);
+    var payload = req.payload || {};
+    // Chống ghi trùng: FE ghi ngầm kèm idemKey; gửi lại cùng khóa (mạng chập chờn, thử lại) → trả kết quả cũ, không ghi lần 2
+    var idem = IDEMPOTENT[req.action] && payload.idemKey ? Idem.get(ctx, payload.idemKey) : null;
+    if (idem) return json_({ ok: true, data: idem, duplicate: true, reqId: req.reqId, ms: Date.now() - started });
+    var data = route.fn(payload, ctx);
+    if (IDEMPOTENT[req.action] && payload.idemKey) Idem.put(ctx, payload.idemKey, data);
     return json_({ ok: true, data: data, reqId: req.reqId, ms: Date.now() - started });
   } catch (err) {
     var code = err && err.code ? err.code : 'SERVER_ERROR';
@@ -505,6 +542,9 @@ var CacheUtil = {
     c.remove(key);
   }
 };
+
+/** 120000 → "120.000" (ghi nhật ký giá). */
+function U_money_(v) { return String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
 
 /* ---- 03_Db.gs ---- */
 /**
@@ -1472,7 +1512,13 @@ var Catalog = {
     var provinces = Object.keys(wards);
     (lookups.PROVINCE || []).forEach(function (pv) { if (provinces.indexOf(pv) === -1) provinces.push(pv); });
     lookups.PROVINCE = provinces;
-    var cat = { panels: panels, tests: tests, panelTests: panelTests, doctors: doctors, lookups: lookups, wards: wards, builtAt: nowIso_() };
+    var discountRules = Db.readAll(T.DISCOUNTS).map(function (r) {
+      return { RuleID: String(r.RuleID), Kind: String(r.Kind || '').toUpperCase(), Tier: String(r.Tier || 'ALL').toUpperCase(),
+               PanelCode: String(r.PanelCode || '').toUpperCase(), Mode: String(r.Mode || '').toUpperCase(), Value: toNum_(r.Value, 0),
+               FromDate: toDateStr_(r.FromDate) || '', ToDate: toDateStr_(r.ToDate) || '', IsActive: toBool_(r.IsActive), Note: r.Note || '' };
+    }).filter(function (r) { return r.RuleID; });
+    var cat = { panels: panels, tests: tests, panelTests: panelTests, doctors: doctors, lookups: lookups, wards: wards,
+                discountRules: discountRules, tiers: TIERS, builtAt: nowIso_() };
     CacheUtil.put(CACHE.CATALOG, cat, CACHE.TTL_LONG);
     return cat;
   },
@@ -1598,20 +1644,20 @@ var SysLog = {
  */
 
 var PatientService = {
-  COLS: ['PatientID', 'FullName', 'SearchName', 'Gender', 'BirthYear', 'Phone', 'Address', 'Ward', 'Province', 'IsActive'],
-  INDEX_KEY: 'pidx_v1',
+  COLS: ['PatientID', 'FullName', 'SearchName', 'Gender', 'BirthYear', 'Phone', 'Address', 'Ward', 'Province', 'IsActive', 'Tier'],
+  INDEX_KEY: 'pidx_v2',
 
   /**
    * Danh bạ bệnh nhân rút gọn cho FE tìm kiếm tức thì (không gọi server mỗi lần gõ).
    * p.since = mốc thời gian lần tải trước → chỉ trả các hồ sơ tạo/sửa sau mốc (đồng bộ tăng dần).
-   * Row: [PatientID, FullName, Gender, BirthYear, Phone, Address, Ward, Province, IsActive(1/0)]
+   * Row: [PatientID, FullName, Gender, BirthYear, Phone, Address, Ward, Province, IsActive(1/0), Tier]
    */
   index: function (p) {
     var all = CacheUtil.get(PatientService.INDEX_KEY);
     if (!all) {
       all = Db.readColumns(T.PATIENTS, null, PatientService.COLS.concat(['CreatedAt', 'UpdatedAt'])).map(function (r) {
         return { s: String(r.UpdatedAt || r.CreatedAt || ''), r: [r.PatientID, r.FullName, r.Gender, toNum_(r.BirthYear) || '', normPhone_(r.Phone),
-          r.Address, r.Ward, r.Province, (r.IsActive === '' || toBool_(r.IsActive)) ? 1 : 0] };
+          r.Address, r.Ward, r.Province, (r.IsActive === '' || toBool_(r.IsActive)) ? 1 : 0, TIERS[r.Tier] ? r.Tier : 'NORMAL'] };
       }).filter(function (x) { return x.r[0]; });
       CacheUtil.put(PatientService.INDEX_KEY, all, CACHE.TTL_LONG);
     }
@@ -1627,7 +1673,7 @@ var PatientService = {
     if (!all) return null;
     for (var i = 0; i < all.length; i++) {
       var r = all[i].r;
-      if (r[0] === patientId) return { PatientID: r[0], FullName: r[1], Gender: r[2], BirthYear: r[3], Phone: r[4], Address: r[5], Ward: r[6], Province: r[7] };
+      if (r[0] === patientId) return { PatientID: r[0], FullName: r[1], Gender: r[2], BirthYear: r[3], Phone: r[4], Address: r[5], Ward: r[6], Province: r[7], Tier: r[9] || 'NORMAL' };
     }
     return null;
   },
@@ -1681,7 +1727,7 @@ var PatientService = {
   publicView_: function (r) {
     return {
       PatientID: r.PatientID, FullName: r.FullName, Gender: r.Gender, BirthYear: toNum_(r.BirthYear),
-      Phone: r.Phone, Address: r.Address, Ward: r.Ward, Province: r.Province
+      Phone: r.Phone, Address: r.Address, Ward: r.Ward, Province: r.Province, Tier: TIERS[r.Tier] ? r.Tier : 'NORMAL'
     };
   },
 
@@ -1691,6 +1737,10 @@ var PatientService = {
    */
   save: function (p, ctx) {
     var data = PatientService.normalize_(p);
+    // Hạng BN quyết định chiết khấu → chỉ người có quyền chiết khấu / bảng giá mới đổi được
+    var canTier = Auth.hasPerm(ctx, PERM.PRICE_OVERRIDE + '|' + PERM.ADMIN_PRICE);
+    if (p.Tier === undefined || !canTier) delete data.Tier;
+    if (!p.PatientID && !data.Tier) data.Tier = 'NORMAL';
     if (p.PatientID) {
       Auth.assertPerm(ctx, PERM.PATIENT_EDIT + '|' + PERM.ORDER_CREATE);
       return withLock_(function () {
@@ -1733,7 +1783,8 @@ var PatientService = {
     return {
       FullName: name, SearchName: searchKey_(name), Gender: String(p.Gender).trim() === 'Nữ' ? 'Nữ' : 'Nam',
       BirthYear: by || '', Phone: phone, Address: String(p.Address || '').trim(),
-      Ward: String(p.Ward || '').trim(), Province: String(p.Province || '').trim(), Note: String(p.Note || '').trim()
+      Ward: String(p.Ward || '').trim(), Province: String(p.Province || '').trim(), Note: String(p.Note || '').trim(),
+      Tier: TIERS[String(p.Tier || '').toUpperCase()] ? String(p.Tier).toUpperCase() : 'NORMAL'
     };
   },
 
@@ -1802,7 +1853,9 @@ var OrderService = {
       if (dup) throw new AppError('DUPLICATE', 'Bệnh nhân ' + patient.FullName + ' đã có phiếu ' + dup.order.OrderID + ' ngày ' + orderDate.split('-').reverse().join('/') +
         ' cùng nhóm ' + dup.overlap.join(', ') + ' (tạo lúc ' + String(dup.order.CreatedAt).substring(11, 16) + ' bởi ' + dup.order.CreatedBy + ').');
     }
-    var money = OrderService.money_(lines, p.discount, ctx);
+    // Chiết khấu: tự động theo quy tắc (hạng BN, tái khám, KM nhóm XN) – hoặc nhập tay (discountMode = MANUAL)
+    var disc = OrderService.discountFor_(lines, patient, orderDate, p, ctx);
+    var money = disc.money;
     var followDays = toNum_(p.followUpDays, 0);
     var assignees = WorkService.normAssignees(p.assignedTo);
 
@@ -1818,6 +1871,7 @@ var OrderService = {
         DoctorName: String(p.doctorName || Settings.get('DEFAULT_DOCTOR', '')).trim(),
         PanelCodes: lines.map(function (l) { return l.PanelCode; }).join(','),
         GrossAmount: money.gross, Discount: money.discount, NetAmount: money.net,
+        DiscountDetail: disc.detail, DiscountMode: disc.mode,
         PaymentStatus: p.paymentStatus === ENUM.PAYMENT.PAID ? ENUM.PAYMENT.PAID : ENUM.PAYMENT.UNPAID,
         Status: ENUM.ORDER_STATUS.REGISTERED,
         FollowUpDays: followDays || '', FollowUpDate: followDays ? addDays_(orderDate, followDays) : '',
@@ -1920,14 +1974,23 @@ var OrderService = {
           Db.deleteRows(T.ORDER_PANELS, db, removed.map(function (e) { return e._row; }));
         }
         patch.PanelCodes = lines.map(function (l) { return l.PanelCode; }).join(',');
-        var money = OrderService.money_(lines, p.discount !== undefined ? p.discount : cur.Discount, ctx, p.discount === undefined);
-        patch.GrossAmount = money.gross; patch.Discount = money.discount; patch.NetAmount = money.net;
+        var dc = OrderService.discountOnUpdate_(cur, lines, p, ctx, patch.OrderDate || toDateStr_(cur.OrderDate));
+        patch.GrossAmount = dc.money.gross; patch.Discount = dc.money.discount; patch.NetAmount = dc.money.net;
+        patch.DiscountDetail = dc.detail; patch.DiscountMode = dc.mode;
         panelsChanged = true;
       } else if (p.discount !== undefined) {
         Auth.assertPerm(ctx, PERM.PRICE_OVERRIDE);
         var d = Math.max(0, toNum_(p.discount, 0));
+        if (d > Number(cur.GrossAmount || 0)) throw new AppError('VALIDATION', 'Chiết khấu lớn hơn tổng tiền.');
         patch.Discount = d;
         patch.NetAmount = Math.max(0, Number(cur.GrossAmount || 0) - d);
+        patch.DiscountMode = 'MANUAL'; patch.DiscountDetail = 'Nhập tay';
+      } else if (p.discountMode === 'AUTO' || (patch.OrderDate && OrderService.curMode_(cur) === 'AUTO')) {
+        // Tính lại chiết khấu tự động (nút "Tính lại tự động" hoặc đổi ngày khám)
+        var curLines = existingPanels.map(function (e) { return { PanelCode: e.PanelCode, Amount: toNum_(e.Amount, 0) }; });
+        var dc2 = OrderService.discountOnUpdate_(cur, curLines, { discountMode: 'AUTO' }, ctx, patch.OrderDate || toDateStr_(cur.OrderDate));
+        patch.Discount = dc2.money.discount; patch.NetAmount = dc2.money.net; patch.GrossAmount = dc2.money.gross;
+        patch.DiscountDetail = dc2.detail; patch.DiscountMode = 'AUTO';
       }
 
       if (panelsChanged) {
@@ -1964,6 +2027,16 @@ var OrderService = {
       var allRes = Db.findBy(T.RESULTS, db, 'OrderID', p.orderId);
       var exMap = {};                                       // panel|test → row
       allRes.forEach(function (r) { exMap[r.PanelCode + '|' + r.TestCode] = r; });
+
+      // 2 máy cùng sửa: FE gửi kèm giá trị đang thấy lúc sửa (base). Ô đã bị người khác đổi khác đi → báo xung đột, không ghi đè.
+      if (p.base) {
+        var clash = (p.results || []).filter(function (r) {
+          if (!Object.prototype.hasOwnProperty.call(p.base, r.testCode)) return false;
+          var ex = exMap[p.panelCode + '|' + r.testCode], cur = ex ? String(ex.Value) : '';
+          return cur !== String(p.base[r.testCode] === null || p.base[r.testCode] === undefined ? '' : p.base[r.testCode]) && cur !== String(r.value || '');
+        }).map(function (r) { var t = Catalog.testMap()[r.testCode]; return t ? t.TestName : r.testCode; });
+        if (clash.length) throw new AppError('CONFLICT', 'Kết quả ' + clash.join(', ') + ' vừa được người khác sửa. Đã tải lại số mới nhất – vui lòng kiểm tra rồi lưu lại.');
+      }
 
       // Mở rộng: kết quả nhập ở nhóm này + các nhóm khác của phiếu có cùng chỉ số
       var raw = (p.results || []).map(function (r) { return { panelCode: p.panelCode, testCode: r.testCode, value: r.value }; });
@@ -2197,7 +2270,8 @@ var OrderService = {
       Note: o.Note, LegacyCode: o.LegacyCode, CreatedAt: o.CreatedAt, CreatedBy: o.CreatedBy,
       UpdatedAt: o.UpdatedAt, UpdatedBy: o.UpdatedBy, Version: toNum_(o.Version, 1),
       AssignedTo: o.AssignedTo ? String(o.AssignedTo).split(',').filter(String) : [],
-      FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || ''
+      FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || '',
+      DiscountDetail: o.DiscountDetail || '', DiscountMode: OrderService.curMode_(o)
     };
     if (ctx && !OrderService.canSeeMoney_(ctx)) { v.GrossAmount = v.Discount = v.NetAmount = null; }
     return v;
@@ -2284,6 +2358,28 @@ var OrderService = {
       });
     });
     return out;
+  },
+
+  /** Chế độ chiết khấu của phiếu (phiếu cũ chưa có cột: có chiết khấu → coi như nhập tay). */
+  curMode_: function (o) { return o.DiscountMode || (Number(o.Discount || 0) > 0 ? 'MANUAL' : 'AUTO'); },
+
+  /** Tạo phiếu: AUTO (mặc định) hoặc MANUAL (FE gửi discountMode = 'MANUAL' kèm số tiền). */
+  discountFor_: function (lines, patient, date, p, ctx) {
+    var manual = p.discountMode === 'MANUAL' || (p.discountMode === undefined && toNum_(p.discount, 0) > 0);
+    if (manual) return { money: OrderService.money_(lines, p.discount, ctx), mode: 'MANUAL', detail: 'Nhập tay' };
+    var auto = Discount.compute(lines.map(function (l) { return { PanelCode: l.PanelCode, Amount: l.Amount }; }), patient, date);
+    return { money: OrderService.money_(lines, auto.total, ctx, true), mode: 'AUTO', detail: auto.detail };
+  },
+
+  /** Sửa phiếu: giữ nhập tay nếu đang nhập tay; ngược lại tính lại theo quy tắc. */
+  discountOnUpdate_: function (cur, lines, p, ctx, date) {
+    if (p.discount !== undefined && p.discountMode !== 'AUTO') return { money: OrderService.money_(lines, p.discount, ctx), mode: 'MANUAL', detail: 'Nhập tay' };
+    if (p.discountMode !== 'AUTO' && OrderService.curMode_(cur) === 'MANUAL') {
+      return { money: OrderService.money_(lines, cur.Discount, ctx, true), mode: 'MANUAL', detail: cur.DiscountDetail || 'Nhập tay' };
+    }
+    var patient = PatientService.fromIndex(cur.PatientID) || Db.findOne(T.PATIENTS, null, 'PatientID', cur.PatientID) || { PatientID: cur.PatientID };
+    var auto = Discount.compute(lines.map(function (l) { return { PanelCode: l.PanelCode, Amount: toNum_(l.Amount, 0) }; }), patient, date);
+    return { money: OrderService.money_(lines, auto.total, ctx, true), mode: 'AUTO', detail: auto.detail };
   },
 
   money_: function (lines, discount, ctx, skipPermCheck) {
@@ -2931,8 +3027,11 @@ var PERM_LABELS = [
   { key: PERM.REPORT_EXPORT, label: 'Xuất Excel báo cáo tổng (toàn bộ phiếu)', group: 'Báo cáo' },
   { key: PERM.WORK_EXPORT, label: 'Xuất danh sách phiếu mình phụ trách', group: 'Báo cáo' },
   { key: PERM.AUDIT_VIEW, label: 'Xem nhật ký hệ thống', group: 'Quản trị' },
-  { key: PERM.ADMIN_USERS, label: 'Quản lý tài khoản & vai trò', group: 'Quản trị' },
-  { key: PERM.ADMIN_CONFIG, label: 'Cấu hình hệ thống & danh mục', group: 'Quản trị' }
+  { key: PERM.ADMIN_CATALOG, label: 'Danh mục XN (tên, đơn vị, khoảng tham chiếu, nhóm)', group: 'Cấu hình' },
+  { key: PERM.ADMIN_PRICE, label: 'Bảng giá & chiết khấu tự động', group: 'Cấu hình' },
+  { key: PERM.ADMIN_DOCTORS, label: 'Bác sĩ chỉ định', group: 'Cấu hình' },
+  { key: PERM.ADMIN_WARDS, label: 'Phường / Xã', group: 'Cấu hình' }
+  // Cấu hình chung, Tài khoản, Vai trò & quyền, Kết nối dữ liệu năm, Hệ thống: chỉ vai trò Quản trị hệ thống (toàn quyền '*')
 ];
 
 var AdminService = {
@@ -3015,7 +3114,7 @@ var AdminService = {
     required_(p, ['RoleCode', 'RoleName']);
     var code = String(p.RoleCode).trim().toUpperCase();
     if (!/^[A-Z0-9_]{2,20}$/.test(code)) throw new AppError('VALIDATION', 'Mã vai trò 2–20 ký tự A-Z 0-9 _');
-    var valid = PERM_LABELS.map(function (x) { return x.key; }).concat(['*']);
+    var valid = PERM_LABELS.map(function (x) { return x.key; }).concat(code === 'ADMIN' ? ['*'] : []);   // toàn quyền chỉ dành cho ADMIN
     var perms = (p.Permissions || []).filter(function (x) { return valid.indexOf(x) > -1; });
     return withLock_(function () {
       var cur = Db.findOne(T.ROLES, null, 'RoleCode', code);
@@ -3259,7 +3358,8 @@ var AdminService = {
       var row = {
         TestCode: code, TestName: String(p.TestName).trim(), Unit: p.Unit || '', ResultType: String(p.ResultType).toUpperCase(),
         RefMinM: n(p.RefMinM), RefMaxM: n(p.RefMaxM), RefMinF: n(p.RefMinF), RefMaxF: n(p.RefMaxF), RefText: p.RefText || '',
-        Price: toNum_(p.Price, 0), SortOrder: toNum_(p.SortOrder, 999), IsActive: p.IsActive === undefined ? true : toBool_(p.IsActive),
+        Price: Auth.hasPerm(ctx, PERM.ADMIN_PRICE) ? toNum_(p.Price, 0) : (cur ? toNum_(cur.Price, 0) : 0),   // giá chỉ đổi khi có quyền Bảng giá
+        SortOrder: toNum_(p.SortOrder, 999), IsActive: p.IsActive === undefined ? true : toBool_(p.IsActive),
         LegacyName: p.LegacyName || (cur ? cur.LegacyName : '')
       };
       if (cur) Db.updateRow(T.TESTS, null, cur._row, row); else Db.insert(T.TESTS, null, [row]);
@@ -3281,11 +3381,15 @@ var AdminService = {
       var cur = Db.findOne(T.PANELS, null, 'PanelCode', code);
       var row = {
         PanelCode: code, PanelName: String(panel.PanelName).trim(), PrintTitle: panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM',
-        PrintSubtitle: panel.PrintSubtitle || '', PricingMode: String(panel.PricingMode || 'TEST').toUpperCase() === 'PANEL' ? 'PANEL' : 'TEST',
-        Price: toNum_(panel.Price, 0), SortOrder: toNum_(panel.SortOrder, 999),
+        PrintSubtitle: panel.PrintSubtitle || '', SortOrder: toNum_(panel.SortOrder, 999),
         IsActive: panel.IsActive === undefined ? true : toBool_(panel.IsActive), TemplateDocId: panel.TemplateDocId || '',
         PageSize: /^A[45]$/.test(String(panel.PageSize || '').toUpperCase()) ? String(panel.PageSize).toUpperCase() : ''
       };
+      // Cách tính giá & giá nhóm chỉ đổi khi có quyền Bảng giá
+      if (Auth.hasPerm(ctx, PERM.ADMIN_PRICE)) {
+        row.PricingMode = String(panel.PricingMode || 'TEST').toUpperCase() === 'PANEL' ? 'PANEL' : 'TEST';
+        row.Price = toNum_(panel.Price, 0);
+      } else if (!cur) { row.PricingMode = 'TEST'; row.Price = 0; }
       if (cur) Db.updateRow(T.PANELS, null, cur._row, row); else Db.insert(T.PANELS, null, [row]);
       if (p.tests) {
         var all = Db.readAll(T.PANEL_TESTS).filter(function (x) { return x.PanelCode !== code; });
@@ -3295,6 +3399,45 @@ var AdminService = {
       Catalog.invalidate();
       SysLog.write(ctx.username, cur ? 'PANEL_UPDATE' : 'PANEL_CREATE', 'Panel', code, { panel: row, tests: tests });
       return Catalog.get();
+    });
+  },
+
+  /**
+   * Bảng giá (quyền admin.price). p: { panels: [{PanelCode, PricingMode, Price}], tests: [{TestCode, Price}] }
+   * Chỉ cập nhật cột giá – không đụng tên/khoảng tham chiếu (thuộc quyền Danh mục XN).
+   */
+  savePrices: function (p, ctx) {
+    var num = function (v) { var x = Math.round(Number(String(v === undefined ? '' : v).replace(/[^\d.-]/g, ''))); return isFinite(x) && x >= 0 ? x : null; };
+    return withLock_(function () {
+      var changes = [];
+      if (p.panels && p.panels.length) {
+        var rows = Db.readAll(T.PANELS), by = {}, ups = [];
+        rows.forEach(function (r) { by[String(r.PanelCode)] = r; });
+        p.panels.forEach(function (x) {
+          var r = by[String(x.PanelCode)], pr = num(x.Price);
+          if (!r || pr === null) return;
+          var mode = String(x.PricingMode || r.PricingMode || 'TEST').toUpperCase() === 'PANEL' ? 'PANEL' : 'TEST';
+          if (toNum_(r.Price, 0) !== pr || String(r.PricingMode).toUpperCase() !== mode) {
+            ups.push({ row: r._row, patch: { Price: pr, PricingMode: mode } });
+            changes.push(r.PanelCode + ': ' + U_money_(r.Price) + ' → ' + U_money_(pr) + (mode !== String(r.PricingMode).toUpperCase() ? ' (' + mode + ')' : ''));
+          }
+        });
+        if (ups.length) Db.updateRows(T.PANELS, null, ups);
+      }
+      if (p.tests && p.tests.length) {
+        var trows = Db.readAll(T.TESTS), tby = {}, tups = [];
+        trows.forEach(function (r) { tby[String(r.TestCode)] = r; });
+        p.tests.forEach(function (x) {
+          var r = tby[String(x.TestCode)], pr = num(x.Price);
+          if (!r || pr === null || toNum_(r.Price, 0) === pr) return;
+          tups.push({ row: r._row, patch: { Price: pr } });
+          changes.push(r.TestCode + ': ' + U_money_(r.Price) + ' → ' + U_money_(pr));
+        });
+        if (tups.length) Db.updateRows(T.TESTS, null, tups);
+      }
+      Catalog.invalidate();
+      if (changes.length) SysLog.write(ctx.username, 'PRICE_UPDATE', 'Catalog', '', { changes: changes });
+      return { changed: changes.length, catalog: Catalog.get() };
     });
   },
 
@@ -3535,6 +3678,158 @@ var WorkService = {
   }
 };
 
+/* ---- 12_Discount.gs ---- */
+/**
+ * 12_Discount.gs – Hạng bệnh nhân & chiết khấu tự động.
+ *  - Quy tắc lưu ở CONFIG › DiscountRules (Admin: Quản trị → Giá & chiết khấu; quyền admin.price).
+ *  - Lõi tính `DiscountCore_` là BẢN SAO Y HỆT frontend/assets/discount-core.js (test đối chiếu trong tools/test-backend.js).
+ */
+var DiscountCore_ = (function () {
+  'use strict';
+  function money(v) { return String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+
+  function compute(o) {
+    var rules = o.rules || [], lines = o.lines || [], tier = o.tier || 'NORMAL', date = String(o.date || '');
+    var R = Number(o.round) > 0 ? Number(o.round) : 1;
+    var stack = o.stack !== false;
+    var tierLabels = o.tierLabels || { NORMAL: 'Thường', VIP: 'VIP', VVIP: 'VVIP' };
+    var names = o.panelNames || {};
+    var rnd = function (x) { return Math.round(x / R) * R; };
+    var fmt = function (r) { return r.Mode === 'PERCENT' ? Number(r.Value) + '%' : money(r.Value) + 'đ'; };
+    var amt = function (r, base) {
+      var v = Number(r.Value) || 0;
+      var d = r.Mode === 'PERCENT' ? rnd(base * v / 100) : v;
+      return Math.max(0, Math.min(base, d));
+    };
+    var act = rules.filter(function (r) {
+      return r && (r.IsActive === true || r.IsActive === 'TRUE' || r.IsActive === 1) &&
+        (!r.FromDate || String(r.FromDate) <= date) && (!r.ToDate || date <= String(r.ToDate)) &&
+        (!r.Tier || r.Tier === 'ALL' || r.Tier === tier);
+    });
+    var gross = lines.reduce(function (s, l) { return s + (Number(l.Amount) || 0); }, 0);
+
+    var panelItems = [];
+    lines.forEach(function (l) {
+      var base = Number(l.Amount) || 0;
+      if (base <= 0) return;
+      var best = null, bestAmt = 0;
+      act.forEach(function (r) {
+        if (r.Kind !== 'PANEL' || (r.PanelCode !== '*' && r.PanelCode !== l.PanelCode)) return;
+        var a = amt(r, base);
+        if (a > bestAmt) { best = r; bestAmt = a; }
+      });
+      if (best) panelItems.push({ kind: 'PANEL', ruleId: best.RuleID, panelCode: l.PanelCode, amount: bestAmt,
+        label: 'KM ' + (names[l.PanelCode] || l.PanelCode) + ' ' + fmt(best) });
+    });
+    var panelSum = panelItems.reduce(function (s, i) { return s + i.amount; }, 0);
+
+    var ret = null;
+    if (o.isReturn) {
+      var base2 = stack ? gross - panelSum : gross, bestR = null, bestRA = 0;
+      act.forEach(function (r) {
+        if (r.Kind !== 'RETURN') return;
+        var a = amt(r, base2);
+        if (a > bestRA) { bestR = r; bestRA = a; }
+      });
+      if (bestR) ret = { kind: 'RETURN', ruleId: bestR.RuleID, amount: bestRA, label: 'Tái khám ' + (tierLabels[tier] || tier) + ' ' + fmt(bestR) };
+    }
+    var items = stack ? panelItems.concat(ret ? [ret] : []) : (ret && ret.amount > panelSum ? [ret] : panelItems);
+    var total = Math.min(gross, items.reduce(function (s, i) { return s + i.amount; }, 0));
+    return { gross: gross, total: total, items: items, isReturn: !!o.isReturn,
+             detail: items.map(function (i) { return i.label + ' (−' + money(i.amount) + ')'; }).join('; ') };
+  }
+
+  return { compute: compute, money: money };
+})();
+
+var Discount = {
+  KINDS: ['PANEL', 'RETURN'],
+  MODES: ['PERCENT', 'AMOUNT'],
+
+  rules: function () { return (Catalog.get().discountRules || []); },
+  settings: function () {
+    return { stack: String(Settings.get('DISCOUNT_STACK', 'TRUE')).toUpperCase() !== 'FALSE',
+             round: Math.max(1, Number(String(Settings.get('DISCOUNT_ROUND', '1000')).replace(/[^\d]/g, '')) || 1) };
+  },
+  /** Có quy tắc tái khám đang hiệu lực cho hạng này? (không có → khỏi tra lịch sử khám – tiết kiệm lệnh gọi) */
+  hasReturnRule_: function (tier, date) {
+    return Discount.rules().some(function (r) {
+      return r.IsActive && r.Kind === 'RETURN' && (!r.Tier || r.Tier === 'ALL' || r.Tier === tier) &&
+        (!r.FromDate || r.FromDate <= date) && (!r.ToDate || date <= r.ToDate);
+    });
+  },
+  /** BN đã có phiếu (chưa hủy) với ngày khám TRƯỚC `date` → tái khám. Duyệt DB mới → cũ, dừng ngay khi thấy. */
+  isReturn_: function (patientId, date) {
+    var y = yearOf_(date);
+    var dbs = YearDb.all().filter(function (r) { return r.Year <= y; }).slice().reverse();
+    for (var i = 0; i < dbs.length; i++) {
+      var rows;
+      try { rows = Db.findBy(T.ORDERS, dbs[i].SpreadsheetId, 'PatientID', patientId); } catch (e) { continue; }
+      if (rows.some(function (o) { return o.Status !== ENUM.ORDER_STATUS.CANCELLED && toDateStr_(o.OrderDate) < date; })) return true;
+    }
+    return false;
+  },
+  /** lines: [{PanelCode, Amount}], patient: {PatientID, Tier} → { total, items, detail, isReturn } */
+  compute: function (lines, patient, date) {
+    var tier = TIERS[patient.Tier] ? patient.Tier : 'NORMAL';
+    var st = Discount.settings();
+    var names = {};
+    Catalog.get().panels.forEach(function (p) { names[p.PanelCode] = p.PanelName; });
+    var isRet = Discount.hasReturnRule_(tier, date) ? Discount.isReturn_(patient.PatientID, date) : false;
+    return DiscountCore_.compute({ rules: Discount.rules(), lines: lines, tier: tier, isReturn: isRet, date: date,
+                                   stack: st.stack, round: st.round, tierLabels: TIERS, panelNames: names });
+  },
+
+  /* ------------------------------------------------------------- ADMIN */
+  adminList: function () {
+    return { rules: Discount.rules(), settings: Discount.settings(), tiers: TIERS };
+  },
+  saveRule: function (p, ctx) {
+    var r = p.rule || p;
+    var kind = String(r.Kind || '').toUpperCase(), mode = String(r.Mode || '').toUpperCase();
+    var tier = String(r.Tier || 'ALL').toUpperCase();
+    if (Discount.KINDS.indexOf(kind) < 0) throw new AppError('VALIDATION', 'Loại chiết khấu: Tái khám hoặc Theo nhóm XN');
+    if (Discount.MODES.indexOf(mode) < 0) throw new AppError('VALIDATION', 'Kiểu giảm: % hoặc Số tiền');
+    if (tier !== 'ALL' && !TIERS[tier]) throw new AppError('VALIDATION', 'Hạng bệnh nhân không hợp lệ');
+    var val = Number(String(r.Value).replace(/[^\d.]/g, ''));
+    if (!(val > 0)) throw new AppError('VALIDATION', 'Giá trị giảm phải > 0');
+    if (mode === 'PERCENT' && val > 100) throw new AppError('VALIDATION', 'Giảm % tối đa 100');
+    var panel = kind === 'PANEL' ? String(r.PanelCode || '').toUpperCase() : '';
+    if (kind === 'PANEL' && panel !== '*' && !Catalog.panelMap()[panel]) throw new AppError('VALIDATION', 'Chọn nhóm xét nghiệm');
+    var from = toDateStr_(r.FromDate) || todayStr_(), to = r.ToDate ? toDateStr_(r.ToDate) : '';
+    if (r.ToDate && !to) throw new AppError('VALIDATION', 'Đến ngày không hợp lệ');
+    if (to && to < from) throw new AppError('VALIDATION', 'Đến ngày phải sau Từ ngày');
+    return withLock_(function () {
+      var cur = r.RuleID ? Db.findOne(T.DISCOUNTS, null, 'RuleID', r.RuleID) : null;
+      var row = { Kind: kind, Tier: tier, PanelCode: panel, Mode: mode, Value: val, FromDate: from, ToDate: to,
+                  IsActive: r.IsActive === undefined ? true : toBool_(r.IsActive), Note: String(r.Note || '').trim(),
+                  UpdatedAt: nowIso_(), UpdatedBy: ctx.username };
+      if (cur) { Db.updateRow(T.DISCOUNTS, null, cur._row, row); row.RuleID = cur.RuleID; }
+      else { row.RuleID = 'KM-' + pad_(Sequence.next('KM'), 4); Db.insert(T.DISCOUNTS, null, [row]); }
+      Catalog.invalidate();
+      SysLog.write(ctx.username, cur ? 'DISCOUNT_UPDATE' : 'DISCOUNT_CREATE', 'Discount', row.RuleID, row);
+      return Discount.adminList();
+    });
+  },
+  deleteRule: function (p, ctx) {
+    required_(p, ['RuleID']);
+    return withLock_(function () {
+      var rows = Db.findRowNums(T.DISCOUNTS, null, 'RuleID', p.RuleID);
+      if (!rows.length) throw new AppError('NOT_FOUND', 'Không tìm thấy quy tắc ' + p.RuleID);
+      Db.deleteRows(T.DISCOUNTS, null, rows);
+      Catalog.invalidate();
+      SysLog.write(ctx.username, 'DISCOUNT_DELETE', 'Discount', p.RuleID, {});
+      return Discount.adminList();
+    });
+  },
+  saveSettings: function (p, ctx) {
+    var round = Math.max(1, Math.round(Number(p.round) || 1));
+    AdminService.saveSettings({ items: [{ Key: 'DISCOUNT_STACK', Value: p.stack === false || p.stack === 'FALSE' ? 'FALSE' : 'TRUE' },
+                                        { Key: 'DISCOUNT_ROUND', Value: String(round) }] }, ctx);
+    return Discount.adminList();
+  }
+};
+
 /* ---- 90_Setup.gs ---- */
 /**
  * 90_Setup.gs – Khởi tạo hệ thống (chạy thủ công trong Apps Script Editor).
@@ -3550,7 +3845,7 @@ function setup() {
   if (!props.getProperty(PROP.PATIENT_DB_ID)) props.setProperty(PROP.PATIENT_DB_ID, DEFAULT_IDS.PATIENT_DB_ID);
 
   var cfg = SpreadsheetApp.openById(props.getProperty(PROP.CONFIG_DB_ID));
-  [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS, T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG]
+  [T.SETTINGS, T.ROLES, T.USERS, T.PANELS, T.TESTS, T.PANEL_TESTS, T.DOCTORS, T.LOOKUPS, T.YEAR_DBS, T.WARDS, T.SEQUENCES, T.SYS_LOG, T.DISCOUNTS]
     .forEach(function (t) { Db.ensureSheet(cfg, t); });
   Db.ensureSheet(SpreadsheetApp.openById(props.getProperty(PROP.PATIENT_DB_ID)), T.PATIENTS);
 
@@ -3564,7 +3859,7 @@ function setup() {
     { Key: 'LAB_HEAD', Value: 'CN. TÔN NỮ KIM HỒNG', Description: 'Người ký phiếu kết quả' },
     { Key: 'REPORT_FOOTER', Value: 'Những kết quả này được lưu trong hệ thống của phòng xét nghiệm. Nếu cần sao chép xin vui lòng gửi người đến hoặc gọi ĐT: 0935 249 351.', Description: 'Dòng chú thích cuối phiếu' },
     { Key: 'DEFAULT_DOCTOR', Value: 'KT SỨC KHỎE', Description: 'Bác sĩ chỉ định mặc định' },
-    { Key: 'PRINT_PAGE_SIZE', Value: 'A5', Description: 'Khổ giấy phiếu kết quả: A5 | A4' },
+    { Key: 'PRINT_PAGE_SIZE', Value: 'A4', Description: 'Khổ giấy phiếu kết quả mặc định: A4 | A5 (từng nhóm XN chỉnh riêng ở Danh mục XN)' },
     { Key: 'PRINT_ONLY_RESULTED', Value: 'TRUE', Description: 'TRUE = chỉ in chỉ số đã có kết quả' },
     { Key: 'ARCHIVE_PDF', Value: 'FALSE', Description: 'TRUE = lưu bản PDF vào thư mục Drive REPORT_FOLDER_ID' },
     { Key: 'REPORT_FOLDER_ID', Value: '', Description: 'ID thư mục Google Drive lưu PDF (năm/tháng)' },
@@ -3572,6 +3867,8 @@ function setup() {
     { Key: 'FOLLOWUP_PRESETS', Value: '7,14,30,90,180', Description: 'Gợi ý số ngày tái khám' },
     { Key: 'SESSION_HOURS', Value: '6', Description: 'Thời hạn phiên đăng nhập (giờ, tối đa 6)' }
   ]);
+  addSettingIfMissing_('DISCOUNT_STACK', 'TRUE', 'TRUE = cộng dồn KM theo nhóm XN và giảm tái khám; FALSE = chỉ lấy mức có lợi hơn');
+  addSettingIfMissing_('DISCOUNT_ROUND', '1000', 'Làm tròn tiền chiết khấu theo % (đồng)');
   addSettingIfMissing_('DB_MAX_ORDER_ROWS', String(CAPACITY.DEFAULT_MAX_ORDER_ROWS), 'Số phiếu tối đa / DB năm trước khi tự tạo DB nối tiếp (0 = không giới hạn)');
   addSettingIfMissing_('DB_MAX_RESULT_ROWS', String(CAPACITY.DEFAULT_MAX_RESULT_ROWS), 'Số dòng kết quả tối đa / DB năm trước khi tự tạo DB nối tiếp (0 = không giới hạn)');
   addSettingIfMissing_('DEFAULT_WARD', 'Phường Pleiku', 'Phường/Xã mặc định khi thêm bệnh nhân mới (thuộc tỉnh đầu tiên trong danh sách Tỉnh)');
@@ -3611,6 +3908,14 @@ function setup() {
   Db.readAll(T.PANELS).forEach(function (r) {
     if (!String(r.PageSize || '').trim() && seedSize[r.PanelCode]) Db.updateRow(T.PANELS, null, r._row, { PageSize: seedSize[r.PanelCode] });
   });
+  // v1.8: in đồng nhất khổ A4 (máy in dùng giấy A4 – nhóm A5 bị thu nhỏ giữa trang). Chạy 1 lần, sau đó Admin chỉnh tự do.
+  var props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('MIG_A4_V1')) {
+    Db.readAll(T.PANELS).forEach(function (r) { if (String(r.PageSize).toUpperCase() !== 'A4') Db.updateRow(T.PANELS, null, r._row, { PageSize: 'A4' }); });
+    var ps = Db.findOne(T.SETTINGS, null, 'Key', 'PRINT_PAGE_SIZE');
+    if (ps && String(ps.Value).toUpperCase() !== 'A4') { Db.updateRow(T.SETTINGS, null, ps._row, { Value: 'A4' }); Settings.invalidate(); }
+    props.setProperty('MIG_A4_V1', nowIso_());
+  }
   CacheUtil.remove(CACHE.CATALOG);
 
   // Admin account (đổi mật khẩu ngay lần đăng nhập đầu)
@@ -3755,7 +4060,7 @@ var SEED_CATALOG = {
 "SortOrder": 2,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "DK",
@@ -3767,7 +4072,7 @@ var SEED_CATALOG = {
 "SortOrder": 3,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "TG",
@@ -3779,7 +4084,7 @@ var SEED_CATALOG = {
 "SortOrder": 4,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "NT",
@@ -3791,7 +4096,7 @@ var SEED_CATALOG = {
 "SortOrder": 5,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "DR",
@@ -3803,7 +4108,7 @@ var SEED_CATALOG = {
 "SortOrder": 6,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "VS",
@@ -3815,7 +4120,7 @@ var SEED_CATALOG = {
 "SortOrder": 7,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "TD",
@@ -3839,7 +4144,7 @@ var SEED_CATALOG = {
 "SortOrder": 9,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "ID",
@@ -3851,7 +4156,7 @@ var SEED_CATALOG = {
 "SortOrder": 10,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "DA",
@@ -3863,7 +4168,7 @@ var SEED_CATALOG = {
 "SortOrder": 11,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 },
 {
 "PanelCode": "GN",
@@ -3875,7 +4180,7 @@ var SEED_CATALOG = {
 "SortOrder": 12,
 "IsActive": true,
 "TemplateDocId": "",
-"PageSize": "A5"
+"PageSize": "A4"
 }
 ],
 "tests": [

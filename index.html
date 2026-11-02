@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="assets/styles.css?v=1.7.0">
+  <link rel="stylesheet" href="assets/styles.css?v=2.0.0">
 </head>
 <body>
   <div id="loading-bar"></div>
@@ -74,6 +74,7 @@
         <h2 id="page-title"></h2>
         <span class="demo-banner d-none" id="demo-banner">DEMO</span>
         <div class="ms-auto d-flex align-items-center gap-2">
+          <button type="button" class="sync-ind d-none" id="sync-ind" aria-live="polite"></button>
           <span class="text-muted small d-none d-md-inline" id="today-label"></span>
         </div>
       </header>
@@ -87,13 +88,15 @@
   <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
   <iframe id="print-frame" title="print" style="position:fixed;width:900px;height:1300px;border:0;left:-10000px;top:0"></iframe>
 
-  <script src="config.js?v=1.7.0"></script>
+  <script src="config.js?v=2.0.0"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="assets/api.js?v=1.7.0"></script>
-  <script src="assets/app.js?v=1.7.0"></script>
-  <script src="assets/views-order.js?v=1.7.0"></script>
-  <script src="assets/views-admin.js?v=1.7.0"></script>
+  <script src="assets/api.js?v=2.0.0"></script>
+  <script src="assets/discount-core.js?v=2.0.0"></script>
+  <script src="assets/app.js?v=2.0.0"></script>
+  <script src="assets/sync.js?v=2.0.0"></script>
+  <script src="assets/views-order.js?v=2.0.0"></script>
+  <script src="assets/views-admin.js?v=2.0.0"></script>
 </body>
 </html>

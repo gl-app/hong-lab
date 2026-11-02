@@ -7,7 +7,7 @@
   'use strict';
   var cfg = global.LIS_CONFIG || { API_URL: 'DEMO' };
   var TOKEN_KEY = 'lis_token';
-  var DEMO_KEY = 'lis_demo_state_v6';
+  var DEMO_KEY = 'lis_demo_state_v8';
   var token = null;
   try { token = sessionStorage.getItem(TOKEN_KEY); } catch (e) { /* storage unavailable */ }
 
@@ -24,9 +24,9 @@
 
   function initDemo() {
     if (demoReady) return demoReady;
-    demoReady = loadScript('assets/gas-shim.js?v=1.7.0')
-      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=1.7.0'); })
-      .then(function () { return loadScript('assets/demo/demo-seed.js?v=1.7.0'); })
+    demoReady = loadScript('assets/gas-shim.js?v=2.0.0')
+      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.0.0'); })
+      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.0.0'); })
       .then(function () {
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch (e) { saved = null; }
@@ -44,6 +44,8 @@
   ApiError.prototype = Object.create(Error.prototype);
 
   function call(action, payload) {
+    // Giả lập lỗi mạng – CHỈ dùng cho kiểm thử tự động (window.__LIS_FAULT__ = 'network')
+    if (global.__LIS_FAULT__ === 'network') return Promise.reject(new ApiError('NETWORK', 'Không kết nối được máy chủ. Kiểm tra mạng.'));
     var body = JSON.stringify({ action: action, token: token, payload: payload || {}, reqId: Date.now().toString(36) });
     var p;
     if (isDemo) {
@@ -75,6 +77,8 @@
         if (res.error && res.error.code === 'UNAUTHORIZED') { setToken(null); global.dispatchEvent(new CustomEvent('lis:unauthorized')); }
         throw new ApiError(res.error ? res.error.code : 'ERROR', res.error ? res.error.message : 'Lỗi không xác định');
       }
+      // Mọi câu trả lời có dữ liệu phiếu → cập nhật bộ nhớ trên máy (sync.js)
+      if (typeof global.LisOnData === 'function') { try { global.LisOnData(action, res.data); } catch (e) { /* bỏ qua */ } }
       return res.data;
     });
   }

@@ -20,7 +20,9 @@
         ['Nam', 'Nữ'].map(function (g) { return '<option' + (p.Gender === g ? ' selected' : '') + '>' + g + '</option>'; }).join('') + '</select></div>' +
       '<div class="col-6 col-md-4"><label class="form-label">Năm sinh</label><input class="form-control" name="BirthYear" inputmode="numeric" maxlength="4" value="' + esc(p.BirthYear || '') + '" placeholder="vd 1980"></div>' +
       '<div class="col-6 col-md-4"><label class="form-label">hoặc Tuổi</label><input class="form-control" name="Age" inputmode="numeric" maxlength="3"></div>' +
-      '<div class="col-12 col-md-6"><label class="form-label">Số điện thoại</label><input class="form-control" name="Phone" inputmode="tel" value="' + esc(p.Phone || '') + '"></div>' +
+      '<div class="col-7 col-md-4"><label class="form-label">Số điện thoại</label><input class="form-control" name="Phone" inputmode="tel" value="' + esc(p.Phone || '') + '"></div>' +
+      '<div class="col-5 col-md-2"><label class="form-label">Hạng BN</label><select class="form-select" name="Tier"' + (App.can('order.price|admin.price') ? '' : ' disabled title="Cần quyền chiết khấu để đổi hạng"') + '>' +
+        [['NORMAL', 'Thường'], ['VIP', 'VIP'], ['VVIP', 'VVIP']].map(function (t) { return '<option value="' + t[0] + '"' + ((p.Tier || 'NORMAL') === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('') + '</select></div>' +
       '<div class="col-12 col-md-6"><label class="form-label">Tỉnh / TP</label><input class="form-control" name="Province" list="dl-province" value="' + esc(pv) + '" autocomplete="off">' +
         '<datalist id="dl-province">' + provinces.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('') + '</datalist></div>' +
       '<div class="col-12 col-md-6"><label class="form-label">Phường / Xã</label><input class="form-control" name="Ward" list="dl-ward" value="' + esc(wd) + '" placeholder="Gõ để chọn…" autocomplete="off">' +
@@ -48,7 +50,7 @@
 
   function patientLine(p) {
     var age = p.BirthYear ? (new Date().getFullYear() - p.BirthYear) + ' tuổi' : '';
-    return '<div class="d-flex justify-content-between gap-2"><div><div class="fw-semibold">' + esc(p.FullName) + '</div>' +
+    return '<div class="d-flex justify-content-between gap-2"><div><div class="fw-semibold">' + esc(p.FullName) + ' ' + App.tierBadge(p.Tier) + '</div>' +
       '<div class="small text-muted">' + esc([p.Gender, age, p.BirthYear ? 'SN ' + p.BirthYear : ''].filter(String).join(' · ')) + '</div>' +
       '<div class="small text-muted">' + esc([p.Address, p.Ward, p.Province].filter(String).join(', ')) + '</div></div>' +
       '<div class="text-end"><div class="mono small">' + esc(p.PatientID) + '</div><div class="small"><i class="bi bi-telephone"></i> ' + esc(p.Phone || '—') + '</div></div></div>';
@@ -129,7 +131,7 @@
 
   /* ================================================================ VIEW: ORDER NEW */
   App.views['order-new'] = function (view, params) {
-    var st = { patient: null, panels: {}, results: false, follow: 0 };
+    var st = { patient: null, panels: {}, results: false, follow: 0, priorDates: [], discManual: false };
     var canPrice = App.can('order.price');
     var canResult = App.can('result.enter');
     var presets = String(App.setting('FOLLOWUP_PRESETS', '7,14,30,90')).split(',').map(Number).filter(Boolean);
@@ -162,6 +164,7 @@
           '<div class="col-sm-4"><label class="form-label">Chiết khấu (đ)</label><input class="form-control tabular" id="o-discount" inputmode="numeric" value="0"></div>' +
           '<div class="col-sm-4"><label class="form-label">Thanh toán</label><select class="form-select" id="o-pay"><option value="PAID">Đã thu</option><option value="UNPAID">Chưa thu</option></select></div>' +
           '<div class="col-sm-4 text-sm-end"><div class="small text-muted">Tổng <span id="o-gross" class="tabular">0 đ</span></div><div class="total tabular" id="o-net">0 đ</div></div>' +
+          '<div class="col-12"><div class="disc-hint small" id="o-disc-detail"></div></div>' +
         '</div></div>' +
       '</div></div>' +
       '<div class="sticky-actions d-flex gap-2 justify-content-end"><button class="btn btn-light" id="o-reset">Làm mới</button>' +
@@ -210,7 +213,11 @@
         (App.can('patient.edit') ? '<button class="btn btn-sm btn-light" id="pt-edit"><i class="bi bi-pencil"></i> Sửa thông tin</button>' : '') +
         (App.can('history.view') ? '<a class="btn btn-sm btn-light" href="#/patient/' + esc(p.PatientID) + '" target="_blank"><i class="bi bi-clock-history"></i> Lịch sử</a>' : '') + '</div>' +
         '<div id="pt-last" class="mt-3"></div>';
+      st.priorDates = []; st.discManual = false; recalc();
       U.api('patient.get', { patientId: p.PatientID }, { silent: true }).then(function (full) {
+        if (full.Tier) st.patient.Tier = full.Tier;
+        st.priorDates = full.orders.filter(function (o) { return o.Status !== 'CANCELLED'; }).map(function (o) { return o.OrderDate; });
+        recalc();   // tái khám → chiết khấu tự động
         var last = full.orders.slice(0, 5);
         U.$('#pt-last', ptBox).innerHTML = last.length ? '<div class="small text-muted mb-1">Lần khám gần đây</div><div class="list-group list-group-flush small">' +
           last.map(function (o) { return '<a class="list-group-item list-group-item-action px-0 d-flex justify-content-between" href="#/order/' + o.OrderID + '"><span>' + U.vnDate(o.OrderDate) + ' · ' + U.chips(o.PanelCodes) + '</span>' + U.badge(o.Status) + '</a>'; }).join('') + '</div>'
@@ -362,12 +369,24 @@
     /* ---------- Money */
     function recalc() {
       var pr = App.priceLines(selection());
-      var gross = Object.keys(st.panels).reduce(function (a, c) { return a + (pr.amounts[c] || 0); }, 0);
-      var disc = Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0;
+      var amounts = {};
+      Object.keys(st.panels).forEach(function (c) { amounts[c] = pr.amounts[c] || 0; });
+      var gross = Object.keys(amounts).reduce(function (a, c) { return a + amounts[c]; }, 0);
+      var inp = U.$('#o-discount', view), det = U.$('#o-disc-detail', view);
+      if (!st.discManual) {
+        var auto = App.autoDiscount(amounts, st.patient, U.$('#o-date', view).value || U.today(), st.priorDates);
+        inp.value = auto.total ? U.num(auto.total) : '0';
+        det.innerHTML = auto.detail ? '<i class="bi bi-magic"></i> Tự động: ' + esc(auto.detail) : '';
+      } else {
+        det.innerHTML = 'Nhập tay · <a href="#" id="o-disc-auto">↺ Tính tự động</a>';
+      }
+      var disc = Number(String(inp.value).replace(/\D/g, '')) || 0;
       U.$('#o-gross', view).textContent = U.money(gross);
       U.$('#o-net', view).textContent = U.money(Math.max(0, gross - disc));
     }
-    U.$('#o-discount', view).addEventListener('input', recalc);
+    U.$('#o-discount', view).addEventListener('input', function () { st.discManual = true; recalc(); });
+    U.on(view, 'click', '#o-disc-auto', function (e) { e.preventDefault(); st.discManual = false; recalc(); });
+    U.$('#o-date', view).addEventListener('change', recalc);
     if (!canPrice && !App.can('order.create')) U.$('#o-discount', view).disabled = true;
 
     /* ---------- Follow-up */
@@ -390,7 +409,7 @@
       var payload = {
         patientId: st.patient.PatientID, orderDate: U.$('#o-date', view).value, doctorName: U.$('#o-doctor', view).value, assignedTo: assignPicker.get(),
         panels: codes.map(function (c) { return { panelCode: c, tests: st.panels[c].tests }; }),
-        discount: Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0,
+        discount: Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0, discountMode: st.discManual ? 'MANUAL' : 'AUTO',
         paymentStatus: U.$('#o-pay', view).value, followUpDays: Number(U.$('#o-follow', view).value) || 0, note: U.$('#o-note', view).value
       };
       if (canResult && U.$('#o-withres', view).checked) {
@@ -474,6 +493,13 @@
       form.to.value = U.today(); form.from.value = U.addDays(U.today(), -n); run();
     });
     U.on(view, 'click', 'tr[data-id]', function (e, el) { App.go('order/' + el.getAttribute('data-id')); });
+    // Tải sẵn phiếu khi rê chuột / chạm vào dòng (mở phiếu gần như tức thì)
+    var pfTimer = null;
+    U.on(view, 'mouseover', 'tr[data-id]', function (e, el) {
+      clearTimeout(pfTimer);
+      pfTimer = setTimeout(function () { if (App.Orders) App.Orders.prefetch(el.getAttribute('data-id')); }, 120);
+    });
+    U.on(view, 'touchstart', 'tr[data-id]', function (e, el) { if (App.Orders) App.Orders.prefetch(el.getAttribute('data-id')); });
     run();
   };
 
@@ -482,11 +508,59 @@
     var orderId = params[0];
     var data = null;
     var activeTab = params[1] || null;
+    var dirty = false, freshWaiting = null, tabBase = {};
 
-    function load() {
-      return U.api('order.get', { orderId: orderId }).then(function (d) { data = d; render(); })
-        .catch(function (e) { view.innerHTML = U.empty(e.message, 'bi-exclamation-triangle'); });
+    /** Hiện ngay bản lưu trên máy (nếu có) → luôn hỏi lại máy chủ và thay bằng bản mới nhất. */
+    function load(forceFresh) {
+      var p0 = forceFresh ? Promise.resolve(null) : App.Orders.cached(orderId);
+      return p0.then(function (c) {
+        if (c && !data) { data = App.overlayPending(c.data); data._stale = true; data._cachedAt = c.at; render(); }
+        return App.Orders.fetch(orderId);
+      }).then(function (d) {
+        applyFresh(App.overlayPending(d));
+      }).catch(function (e) {
+        if (data) { data._stale = false; data._offline = true; if (!dirty) render(); else noteFresh(); return; }
+        view.innerHTML = U.empty(e.message, 'bi-exclamation-triangle');
+      });
     }
+    /** Dữ liệu máy chủ về: đang gõ dở kết quả → không đè, chỉ báo "có cập nhật mới". */
+    function applyFresh(nd) {
+      if (dirty && data) { freshWaiting = nd; noteFresh(); return; }
+      data = nd; freshWaiting = null; render();
+    }
+    function noteFresh() {
+      var el = U.$('#d-stale', view);
+      if (!el) return;
+      if (freshWaiting) el.innerHTML = '<i class="bi bi-arrow-repeat"></i> Có cập nhật mới từ máy chủ · <a href="#" id="d-apply-fresh">Tải lại</a>';
+      else if (data && data._offline) el.innerHTML = '<i class="bi bi-cloud-slash text-warning"></i> Chưa kết nối được máy chủ – đang xem bản lưu trên máy';
+    }
+    function pendingCount() { return App.Outbox.pending(orderId).length; }
+    /** Thao tác cần số liệu đã xác nhận (in, sửa tiền, hủy): chặn khi còn thay đổi chưa lưu / đang xem bản cũ. */
+    function needConfirmed(fn, what) {
+      if (pendingCount()) { U.toast('Đang lưu thay đổi lên máy chủ – chờ biểu tượng đồng bộ hoàn tất rồi ' + what + '.', 'warn'); App.Outbox.kick(); return; }
+      if (data._stale || data._offline || freshWaiting) {
+        U.toast('Đang tải số liệu mới nhất từ máy chủ…');
+        App.Orders.fetch(orderId).then(function (d) { dirty = false; data = d; freshWaiting = null; render(); fn(); })
+          .catch(function () { U.toast('Không kết nối được máy chủ – chưa ' + what + ' để tránh dùng số liệu cũ.', 'error'); });
+        return;
+      }
+      fn();
+    }
+    // Kết quả ghi ngầm của phiếu này: thành công → thay bằng số máy chủ; lỗi nghiệp vụ → báo & tải lại (hoàn tác)
+    var offSync = App.Outbox.on(function (type, det) {
+      if (!det || !det.item || det.item.orderId !== orderId || !data) return;
+      if (type === 'synced') {
+        if (det.item.kind === 'results') U.toast('Đã lưu kết quả ' + det.item.payload.panelCode + ' lên hệ thống');
+        if (det.data && det.data.order) applyFresh(App.overlayPending(det.data));
+      } else if (type === 'failed') {
+        U.toast((det.error.code === 'CONFLICT' ? '' : 'Không lưu được: ') + det.error.message, 'error');
+        dirty = false; data._stale = true; load(true);
+      } else if (type === 'retry' && !dirty) {
+        render();
+      }
+    });
+    App._cleanup = function () { offSync(); };
+    U.on(view, 'click', '#d-apply-fresh', function (e) { e.preventDefault(); if (freshWaiting) { data = freshWaiting; freshWaiting = null; render(); } });
 
     function render() {
       var o = data.order;
@@ -500,7 +574,9 @@
       view.innerHTML =
         '<div class="d-flex align-items-center gap-2 mb-3 flex-wrap"><a href="#/order-search" class="btn btn-sm btn-light"><i class="bi bi-arrow-left"></i></a>' +
           '<h4 class="mb-0 mono fw-bold">' + o.OrderID + '</h4>' + U.badge(o.Status) +
+          (data._pending && data._pending.payment ? '<span class="pend-chip"><i class="bi bi-cloud-arrow-up"></i> Đang lưu</span>' : '') +
           (money ? (App.can('order.edit') && !cancelled ? '<button class="btn p-0 border-0" id="pay-toggle" title="Bấm để đổi trạng thái thanh toán">' + U.badge(o.PaymentStatus) + '</button>' : U.badge(o.PaymentStatus)) : '') +
+          '<span class="stale-note" id="d-stale">' + (data._stale ? '<span class="spinner-border text-secondary"></span> Đang làm mới…' : '') + '</span>' +
           '<div class="ms-auto d-flex gap-2 flex-wrap">' +
           (App.can('print') && !cancelled ? '<div class="btn-group"><button class="btn btn-primary" id="d-qprint"><i class="bi bi-printer"></i> In nhanh</button>' +
             '<button class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Thêm"></button><ul class="dropdown-menu dropdown-menu-end">' +
@@ -524,7 +600,8 @@
             data.panels.map(function (p) {
               var pn = App.panel(p.PanelCode);
               return '<tr><td><span class="panel-chip">' + p.PanelCode + '</span> ' + esc(pn ? pn.PanelName : '') + (p.PrintCount ? ' <i class="bi bi-printer text-muted" title="Đã in ' + p.PrintCount + ' lần"></i>' : '') +
-                '</td><td class="small">' + (p.ResultStatus === 'RESULTED' ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> Có KQ</span>' : '<span class="text-muted">Chờ KQ</span>') + '</td>' +
+                '</td><td class="small">' + (data._pending && data._pending['panel:' + p.PanelCode] ? '<span class="pend-chip"><i class="bi bi-cloud-arrow-up"></i> Đang lưu</span>'
+                  : (p.ResultStatus === 'RESULTED' ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> Có KQ</span>' : '<span class="text-muted">Chờ KQ</span>')) + '</td>' +
                 (money ? '<td class="text-end tabular">' + U.money(p.Amount) + '</td>' : '') + '</tr>';
             }).join('') + '</tbody></table>' +
             (money ? '<div class="d-flex justify-content-between small"><span class="text-muted">Tổng</span><span class="tabular">' + U.money(o.GrossAmount) + '</span></div>' +
@@ -532,6 +609,9 @@
                 (App.can('order.price') && !cancelled
                   ? '<button class="btn btn-link btn-sm p-0 tabular text-decoration-none" id="disc-edit" title="Sửa chiết khấu">− ' + U.money(o.Discount) + ' <i class="bi bi-pencil small"></i></button>'
                   : '<span class="tabular">− ' + U.money(o.Discount) + '</span>') + '</div>' +
+              ((o.DiscountDetail || (o.DiscountMode === 'MANUAL' && App.can('order.edit') && !cancelled)) ? '<div class="small text-muted text-end disc-detail">' +
+                (o.DiscountMode === 'AUTO' && o.DiscountDetail ? '<i class="bi bi-magic"></i> ' : '') + esc(o.DiscountDetail || '') +
+                (App.can('order.edit') && !cancelled && o.DiscountMode === 'MANUAL' ? ' · <a href="#" id="disc-auto" title="Áp dụng lại quy tắc chiết khấu tự động">↺ Tính tự động</a>' : '') + '</div>' : '') +
               '<div class="d-flex justify-content-between fw-bold fs-5 text-primary"><span>Thành tiền</span><span class="tabular">' + U.money(o.NetAmount) + '</span></div>' : '') +
             '<div class="small text-muted mt-2">Tạo: ' + esc(o.CreatedBy) + ' · ' + U.vnDateTime(o.CreatedAt) + '<br>Cập nhật: ' + esc(o.UpdatedBy) + ' · ' + U.vnDateTime(o.UpdatedAt) + '</div>' +
           '</div></div></div></div>' +
@@ -541,8 +621,10 @@
           '<li class="nav-item"><button class="nav-link' + (activeTab === 'audit' ? ' active' : '') + '" data-tab="audit"><i class="bi bi-journal-text"></i> Nhật ký phiếu</button></li>' +
         '</ul></div><div class="card-body" id="d-tab"></div></div>';
 
+      dirty = false;
       renderTab(resMap, canEnter);
       bind();
+      noteFresh();
       if (o.AssignedTo.length) App.Users.load().then(function () { var el = U.$('#d-assignees', view); if (el) el.textContent = App.Users.names(o.AssignedTo); }).catch(function () {});
     }
 
@@ -556,12 +638,27 @@
           (canEnter ? '<div class="d-flex gap-2 justify-content-end mt-3"><span class="small text-muted me-auto align-self-center"><span class="kbd">Enter</span> chuyển ô kế tiếp</span>' +
             '<button class="btn btn-primary" id="d-save-res"><i class="bi bi-save"></i> Lưu kết quả ' + code + '</button></div>' : '');
         bindResultInputs(box, function () { return { gender: o.Gender, age: o.Age }; });
+        // Giá trị gốc lúc mở (gửi kèm để máy chủ phát hiện 2 máy cùng sửa 1 ô) + đánh dấu ô đang chờ lưu
+        tabBase = {};
+        Object.keys(resMap[code] || {}).forEach(function (t) { var r = resMap[code][t]; if (!(data._pending && data._pending[code + '|' + t])) tabBase[t] = r.Value === undefined || r.Value === null ? '' : String(r.Value); });
+        U.$$('.res-input', box).forEach(function (el) {
+          var t = el.getAttribute('data-test');
+          if (data._pending && data._pending[code + '|' + t]) el.classList.add('res-pending');
+        });
+        box.addEventListener('input', function (e) { if (e.target.classList && e.target.classList.contains('res-input')) dirty = true; });
         var btn = U.$('#d-save-res', box);
         if (btn) btn.onclick = function () {
+          var results = collectResults(U.$('table', box));
+          var base = {};
+          results.forEach(function (r) { base[r.testCode] = tabBase.hasOwnProperty(r.testCode) ? tabBase[r.testCode] : ''; });
           btn.disabled = true;
-          U.api('order.saveResults', { orderId: o.OrderID, panelCode: code, results: collectResults(U.$('table', box)) })
-            .then(function (d) { data = d; U.toast('Đã lưu kết quả ' + code); render(); })
-            .catch(function () {}).finally(function () { btn.disabled = false; });
+          // Ghi lạc quan: hiện ngay, gửi ngầm (có chống ghi trùng + phát hiện xung đột); vẫn chuyển trang / phiếu khác được
+          App.Outbox.enqueue('order.saveResults', { orderId: o.OrderID, panelCode: code, results: results, base: base },
+            { orderId: o.OrderID, label: 'Kết quả ' + code, kind: 'results' }).then(function () {
+            dirty = false;
+            data = App.overlayPending(data);
+            render();
+          });
         };
         var first = U.$('.res-input:not([disabled])', box);
         if (first && !first.value) first.focus();
@@ -588,11 +685,12 @@
         };
       });
       var qp = U.$('#d-qprint', view);
-      if (qp) qp.onclick = function () { App.choosePanelsThen(data, function (codes) { App.quickPrint(data, codes); }); };
+      if (qp) qp.onclick = function () { needConfirmed(function () { App.choosePanelsThen(data, function (codes) { App.quickPrint(data, codes); }); }, 'in'); };
       U.$$('[data-export]', view).forEach(function (b) {
         b.onclick = function () {
           var fmt = b.getAttribute('data-export');
           if (Api.isDemo) { U.toast('Tải PDF/Word chạy trên Google Apps Script – ở DEMO hãy dùng "In nhanh" → Lưu PDF.', 'warn'); return; }
+          if (pendingCount() || data._stale || data._offline) { needConfirmed(function () { b.click(); }, 'xuất file'); return; }
           App.choosePanelsThen(data, function (codes) {
             U.toast('Đang tạo file ' + fmt.toUpperCase() + '…');
             U.api('print.render', { orderId: data.order.OrderID, panelCodes: codes, format: fmt }).then(function (f) {
@@ -601,8 +699,16 @@
           });
         };
       });
+      var da = U.$('#disc-auto', view);
+      if (da) da.onclick = function (e) {
+        e.preventDefault();
+        U.api('order.update', { orderId: data.order.OrderID, version: data.order.Version, discountMode: 'AUTO' })
+          .then(function (d) { data = d; U.toast('Đã tính lại chiết khấu tự động: −' + U.money(d.order.Discount)); render(); })
+          .catch(function (er) { if (er.code === 'CONFLICT') load(); });
+      };
       // Sửa chiết khấu / thanh toán ngay tại ô Thành tiền
       var de = U.$('#disc-edit', view);
+      if (de && (pendingCount() || data._stale || data._offline)) de.disabled = true;
       if (de) de.onclick = function () {
         var o = data.order;
         U.$('#disc-row', view).innerHTML = '<span class="text-muted">Chiết khấu</span><div class="input-group input-group-sm" style="max-width:230px">' +
@@ -622,15 +728,15 @@
       };
       var pb = U.$('#pay-toggle', view);
       if (pb) pb.onclick = function () {
-        var o = data.order;
-        U.api('order.update', { orderId: o.OrderID, version: o.Version, paymentStatus: o.PaymentStatus === 'PAID' ? 'UNPAID' : 'PAID' })
-          .then(function (d) { data = d; U.toast(d.order.PaymentStatus === 'PAID' ? 'Đã ghi nhận thu tiền' : 'Đã chuyển về Chưa thu'); render(); })
-          .catch(function (e) { if (e.code === 'CONFLICT') load(); });
+        var o = data.order, target = o.PaymentStatus === 'PAID' ? 'UNPAID' : 'PAID';
+        // Ghi lạc quan: đặt giá trị tuyệt đối (PAID/UNPAID), gửi ngầm – gửi lại không làm sai
+        App.Outbox.enqueue('order.update', { orderId: o.OrderID, paymentStatus: target }, { orderId: o.OrderID, label: 'Thanh toán', kind: 'payment' })
+          .then(function () { data = App.overlayPending(data); render(); U.toast(target === 'PAID' ? 'Đã ghi nhận thu tiền' : 'Đã chuyển về Chưa thu'); });
       };
       var ed = U.$('#d-edit', view);
-      if (ed) ed.onclick = editOrder;
+      if (ed) ed.onclick = function () { needConfirmed(editOrder, 'sửa phiếu'); };
       var cc = U.$('#d-cancel', view);
-      if (cc) cc.onclick = function () { cancelDialog(data.order, function (d) { data = d; U.toast('Đã hủy phiếu ' + d.order.OrderID); render(); }); };
+      if (cc) cc.onclick = function () { needConfirmed(function () { cancelDialog(data.order, function (d) { data = d; U.toast('Đã hủy phiếu ' + d.order.OrderID); render(); }); }, 'hủy phiếu'); };
     }
 
     function editOrder() {
@@ -668,7 +774,9 @@
         if (!panels.length) { U.toast('Phiếu cần ít nhất 1 nhóm', 'warn'); return; }
         var payload = { orderId: o.OrderID, version: o.Version, orderDate: f.orderDate, doctorName: f.doctorName, paymentStatus: f.paymentStatus,
           followUpDays: Number(f.followUpDays) || 0, note: f.note, panels: panels, assignedTo: ePicker.get() };
-        if (canPrice) payload.discount = Number(String(f.discount).replace(/\D/g, '')) || 0;
+        // Chỉ gửi chiết khấu khi người dùng đổi số → chuyển sang nhập tay; giữ nguyên thì máy chủ tự tính lại theo quy tắc (nếu đang tự động)
+        var nd = Number(String(f.discount).replace(/\D/g, '')) || 0;
+        if (canPrice && nd !== Number(o.Discount || 0)) payload.discount = nd;
         U.api('order.update', payload).then(function (d) { data = d; m.hide(); U.toast('Đã cập nhật phiếu'); render(); })
           .catch(function (e) { if (e.code === 'CONFLICT') { m.hide(); load(); } });
       };

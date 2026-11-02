@@ -5,6 +5,7 @@
   'use strict';
   function rnd(a, b) { return a + Math.random() * (b - a); }
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function today0() { return new Date(); }
 
   global.DemoSeed = {
     run: function () {
@@ -51,6 +52,17 @@
           Phone: phone, Address: Math.floor(rnd(1, 300)) + ' Đường số ' + Math.floor(rnd(1, 30)), Ward: pick(wards), Province: 'Gia Lai', force: true }, ctx).patient);
       }
 
+      // Hạng BN + quy tắc chiết khấu mẫu (minh họa)
+      patients.forEach(function (pt, i) { if (i % 6 === 0 || i % 11 === 0) PatientService.save(Object.assign({}, pt, { Tier: i % 11 === 0 ? 'VVIP' : 'VIP' }), ctx); });
+      patients = patients.map(function (pt) { return PatientService.fromIndex(pt.PatientID) || pt; });
+      var from = Utilities.formatDate(new Date(today0().getTime() - 90 * 86400000), APP.TZ, 'yyyy-MM-dd');
+      [{ Kind: 'RETURN', Tier: 'NORMAL', Mode: 'PERCENT', Value: 5, Note: 'Tái khám khách thường' },
+       { Kind: 'RETURN', Tier: 'VIP', Mode: 'PERCENT', Value: 10, Note: 'Tái khám VIP' },
+       { Kind: 'RETURN', Tier: 'VVIP', Mode: 'PERCENT', Value: 15, Note: 'Tái khám VVIP' },
+       { Kind: 'PANEL', Tier: 'ALL', PanelCode: 'TG', Mode: 'PERCENT', Value: 20, Note: 'KM tuyến giáp' }].forEach(function (r) {
+        r.FromDate = from; Discount.saveRule({ rule: r }, ctx);
+      });
+
       // Orders over the past 75 days
       var tm = Catalog.testMap();
       var doctors = ['KT SỨC KHỎE', 'KT SỨC KHỎE', 'KT SỨC KHỎE', 'BS NGHĨA', 'BS SƠN', 'BS TOÁN'];
@@ -80,7 +92,7 @@
             OrderService.create({ patientId: pt.PatientID, orderDate: ds, doctorName: pick(doctors), panels: panels,
               assignedTo: Math.random() < 0.8 ? [pick(['ktv', 'ktv', 'bacsi'])] : [],
               followUpDays: follow, paymentStatus: Math.random() < 0.85 ? 'PAID' : 'UNPAID',
-              discount: Math.random() < 0.1 ? 20000 : 0, results: res }, ctx);
+              discount: Math.random() < 0.05 ? 20000 : 0, results: res, force: true }, ctx);
           } catch (e) { console.warn('seed order skipped', e.message); }
         }
       }

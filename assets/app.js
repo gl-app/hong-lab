@@ -179,7 +179,7 @@
    * đồng bộ tăng dần mỗi 60s → tìm theo tên / SĐT tức thì, không chờ server.
    */
   App.Patients = (function () {
-    var KEY = 'lis_pidx_v1', rows = null, stamp = '', syncedAt = 0, pending = null;
+    var KEY = 'lis_pidx_v2', rows = null, stamp = '', syncedAt = 0, pending = null;
     var key = function (s) {
       return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toUpperCase().replace(/\s+/g, ' ').trim();
     };
@@ -191,12 +191,12 @@
     };
     var toObj = function (r) {
       return { PatientID: r[0], FullName: r[1], Gender: r[2], BirthYear: r[3] || null, Phone: digits(r[4]), Address: r[5], Ward: r[6], Province: r[7],
-               _active: r[8] !== 0, _k: key(r[1]), _a: key([r[5], r[6], r[7]].join(' ')) };
+               _active: r[8] !== 0, Tier: r[9] || 'NORMAL', _k: key(r[1]), _a: key([r[5], r[6], r[7]].join(' ')) };
     };
     try { var o = JSON.parse(sessionStorage.getItem(KEY) || 'null'); if (o) { rows = o.rows.map(toObj); stamp = o.stamp; } } catch (e) { /* ignore */ }
     function persist() {
       try {
-        sessionStorage.setItem(KEY, JSON.stringify({ stamp: stamp, rows: rows.map(function (p) { return [p.PatientID, p.FullName, p.Gender, p.BirthYear, p.Phone, p.Address, p.Ward, p.Province, p._active ? 1 : 0]; }) }));
+        sessionStorage.setItem(KEY, JSON.stringify({ stamp: stamp, rows: rows.map(function (p) { return [p.PatientID, p.FullName, p.Gender, p.BirthYear, p.Phone, p.Address, p.Ward, p.Province, p._active ? 1 : 0, p.Tier || 'NORMAL']; }) }));
       } catch (e) { /* quota */ }
     }
     function sync() {
@@ -333,6 +333,26 @@
    * Tiền từng nhóm khi chỉ số trùng chỉ tính 1 lần (giống backend buildLines_).
    * sel: { PanelCode: [TestCode] } theo thứ tự chọn → { amounts: {PanelCode: n}, dup: {PanelCode: {TestCode: 'tính ở X'}} }
    */
+  /**
+   * Xem trước chiết khấu tự động (cùng lõi với máy chủ – discount-core.js). Máy chủ tính lại khi lưu.
+   * amounts: {PanelCode: tiền}, priorDates: ngày các lần khám trước (chưa hủy).
+   */
+  App.autoDiscount = function (amounts, patient, date, priorDates) {
+    var cat = App.state.catalog || {}, names = {};
+    (cat.panels || []).forEach(function (p) { names[p.PanelCode] = p.PanelName; });
+    var lines = Object.keys(amounts).map(function (c) { return { PanelCode: c, Amount: amounts[c] || 0 }; });
+    if (!window.LisDiscount) return { total: 0, items: [], detail: '' };
+    return window.LisDiscount.compute({
+      rules: cat.discountRules || [], lines: lines, tier: (patient && patient.Tier) || 'NORMAL', date: date,
+      isReturn: (priorDates || []).some(function (d) { return d < date; }),
+      stack: String(App.setting('DISCOUNT_STACK', 'TRUE')).toUpperCase() !== 'FALSE',
+      round: Number(App.setting('DISCOUNT_ROUND', 1000)) || 1, tierLabels: cat.tiers, panelNames: names
+    });
+  };
+  App.tierBadge = function (t) {
+    return t === 'VVIP' ? '<span class="badge tier-vvip">VVIP</span>' : (t === 'VIP' ? '<span class="badge tier-vip">VIP</span>' : '');
+  };
+
   App.priceLines = function (sel) {
     var covered = {}, charged = {}, amounts = {}, dup = {};
     Object.keys(sel).forEach(function (pc) { var p = App.panel(pc); if (p && p.PricingMode === 'PANEL') sel[pc].forEach(function (c) { covered[c] = pc; }); });
@@ -433,6 +453,7 @@
       return '<a class="nav-link" href="#/' + m.key + '" data-key="' + m.key + '"><i class="bi ' + m.icon + '"></i><span>' + U.esc(m.label) + '</span>' +
         (m.key === 'followup' ? '<span class="badge rounded-pill text-bg-warning d-none" id="fu-badge"></span>' : '') + '</a>';
     }).join('');
+    if (App.initLocalCache) App.initLocalCache(boot.user.username);   // bộ nhớ trên máy + gửi tiếp thay đổi còn tồn (sync.js)
     if (boot.user.mustChangePassword) changePassword(true);
     route();
     refreshFollowupBadge();
@@ -444,7 +465,7 @@
   function capacityBanner() {
     var old = document.getElementById('cap-banner');
     if (old) old.remove();
-    if (!App.can('admin.config')) return;
+    if (!App.can('*')) return;
     var warn = (App.state.years || []).filter(function (y) { return y.Mode === 'RW' && y.UsedPercent >= (App.state.capacityWarnPercent || 70); });
     if (!warn.length) return;
     document.querySelector('.content').insertAdjacentHTML('beforebegin', '<div id="cap-banner" class="alert alert-warning rounded-0 mb-0 py-2 small">' +
@@ -502,7 +523,17 @@
       }).finally(function () { btn.disabled = false; btn.textContent = 'Đăng nhập'; });
     };
     document.getElementById('btn-logout').onclick = function () {
-      Api.call('auth.logout').catch(function () {}).finally(function () { Api.setToken(null); App.Patients.clear(); App.Users.reset(); location.hash = ''; showLogin(); });
+      var doLogout = function () {
+        Api.call('auth.logout').catch(function () {}).finally(function () {
+          Api.setToken(null); App.Patients.clear(); App.Users.reset();
+          if (App.clearLocalCache) App.clearLocalCache();   // xóa bộ nhớ phiếu & hàng đợi trên máy
+          location.hash = ''; showLogin();
+        });
+      };
+      var n = App.Outbox ? App.Outbox.count() : 0;
+      if (!n) return doLogout();
+      U.confirm('Còn ' + n + ' thay đổi chưa lưu lên máy chủ', 'Các thay đổi này <b>chưa được ghi vào hệ thống</b> (thường do mất mạng). Đăng xuất bây giờ sẽ <b>bỏ các thay đổi đó</b>.<br>Nên chờ biểu tượng đồng bộ biến mất rồi mới đăng xuất.', 'Vẫn đăng xuất', true)
+        .then(function (ok) { if (ok) doLogout(); else App.Outbox.kick(); });
     };
     document.getElementById('btn-change-pass').onclick = function () { changePassword(false); };
     document.getElementById('menu-toggle').onclick = function () { document.body.classList.toggle('sidebar-open'); };

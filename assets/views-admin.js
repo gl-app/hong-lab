@@ -55,8 +55,8 @@
   App.views['my-work'] = function (view) {
     var t = U.today();
     var st = App._workState || { status: 'PENDING', from: U.addDays(t, -90), to: t, username: App.state.user.username };
-    var isAdmin = App.can('admin.users');
-    var canExport = App.can('work.export|admin.users');
+    var isAdmin = App.can('*');
+    var canExport = App.can('work.export|*');
     view.innerHTML = '<div class="card mb-3"><div class="card-body d-flex flex-wrap gap-2 align-items-end">' +
       '<div class="btn-group" role="group" id="w-tabs">' +
         [['PENDING', 'Chờ kết quả'], ['DONE', 'Hoàn tất'], ['ALL', 'Tất cả']].map(function (x) {
@@ -237,7 +237,7 @@
                   '<td><div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" style="width:' + pct + '%;background:var(--brand)"></div></div><span class="small tabular" style="width:44px">' + pct + '%</span></div></td></tr>';
               }).join('') : '<tr><td colspan="5">' + U.empty('Không có dữ liệu') + '</td></tr>';
             })() + '</tbody></table></div></div></div></div>';
-        if (App.can('report.revenue|admin.users')) {
+        if (App.can('report.revenue|*')) {
           body.insertAdjacentHTML('beforeend', '<div class="card mt-3"><div class="card-header">Năng suất theo nhân viên phụ trách <span class="small text-muted fw-normal ms-2">(thời gian trả KQ = tạo phiếu → hoàn tất)</span></div><div id="r-prod">' +
             '<div class="empty"><div class="spinner-border text-secondary"></div></div></div></div>');
           U.api('report.productivity', st, { silent: true }).then(function (pr) {
@@ -339,7 +339,7 @@
       '<div class="col-6 col-md-2"><label class="form-label">Tài khoản</label><input class="form-control" name="username"></div>' +
       '<div class="col-6 col-md-2"><label class="form-label">Thao tác</label><select class="form-select" name="action"><option value="">Tất cả</option>' +
         ['LOGIN', 'LOGIN_FAILED', 'ORDER_CREATE', 'ORDER_UPDATE', 'ORDER_CANCEL', 'RESULT_SAVE', 'PRINT', 'FOLLOWUP_UPDATE', 'PATIENT_CREATE', 'PATIENT_UPDATE', 'EXPORT', 'WORK_EXPORT', 'YEAR_DB_CREATE', 'WARDS_SAVE',
-         'USER_CREATE', 'USER_UPDATE', 'ROLE_UPDATE', 'SETTINGS_UPDATE', 'YEAR_DB_SAVE', 'TEST_UPDATE', 'PANEL_UPDATE'].map(function (a) { return '<option>' + a + '</option>'; }).join('') + '</select></div>' +
+         'USER_CREATE', 'USER_UPDATE', 'ROLE_UPDATE', 'SETTINGS_UPDATE', 'YEAR_DB_SAVE', 'TEST_UPDATE', 'PANEL_UPDATE', 'PRICE_UPDATE', 'DISCOUNT_CREATE', 'DISCOUNT_UPDATE', 'DISCOUNT_DELETE', 'STORAGE_OPTIMIZE'].map(function (a) { return '<option>' + a + '</option>'; }).join('') + '</select></div>' +
       '<div class="col-md-3"><label class="form-label">Từ khóa (mã phiếu, nội dung)</label><input class="form-control" name="q"></div>' +
       '<div class="col-md-1"><button class="btn btn-primary w-100" type="submit"><i class="bi bi-search"></i></button></div></form></div></div><div class="card" id="a-list"></div>';
     var form = U.$('#a-form', view);
@@ -360,16 +360,27 @@
 
   /* ================================================================ ADMIN */
   App.views['admin'] = function (view, params) {
-    var tabs = [];
-    if (App.can('admin.config')) tabs.push(['general', 'Cấu hình chung', 'bi-sliders']);
-    if (App.can('admin.users')) tabs.push(['users', 'Tài khoản', 'bi-people'], ['roles', 'Vai trò & quyền', 'bi-shield-lock']);
-    if (App.can('admin.config')) tabs.push(['catalog', 'Danh mục XN', 'bi-list-check'], ['doctors', 'Bác sĩ chỉ định', 'bi-person-badge'], ['wards', 'Phường / Xã', 'bi-geo-alt'], ['years', 'Kết nối dữ liệu năm', 'bi-database'], ['system', 'Hệ thống', 'bi-cpu']);
+    // Thứ tự thẻ: hệ thống → người dùng → danh mục nghiệp vụ → hạ tầng. '*' = chỉ Quản trị hệ thống.
+    var ALL = [
+      ['general', 'Cấu hình chung', 'bi-sliders', '*'],
+      ['users', 'Tài khoản', 'bi-people', '*'],
+      ['roles', 'Vai trò & quyền', 'bi-shield-lock', '*'],
+      ['catalog', 'Danh mục XN', 'bi-list-check', 'admin.catalog'],
+      ['pricing', 'Giá & chiết khấu', 'bi-tags', 'admin.price'],
+      ['doctors', 'Bác sĩ chỉ định', 'bi-person-badge', 'admin.doctors'],
+      ['wards', 'Phường / Xã', 'bi-geo-alt', 'admin.wards'],
+      ['years', 'Kết nối dữ liệu năm', 'bi-database', '*'],
+      ['system', 'Hệ thống', 'bi-cpu', '*']
+    ];
+    var isSys = App.can('*');
+    var tabs = ALL.filter(function (t) { return isSys || (t[3] !== '*' && App.can(t[3])); });
+    if (!tabs.length) { view.innerHTML = U.empty('Không có quyền cấu hình', 'bi-lock'); return; }
     var tab = params[0] && tabs.some(function (t) { return t[0] === params[0]; }) ? params[0] : tabs[0][0];
     view.innerHTML = '<ul class="nav nav-tabs mb-3">' + tabs.map(function (t) {
       return '<li class="nav-item"><a class="nav-link' + (t[0] === tab ? ' active' : '') + '" href="#/admin/' + t[0] + '"><i class="bi ' + t[2] + '"></i> ' + t[1] + '</a></li>';
     }).join('') + '</ul><div id="ad-body"></div>';
     var body = U.$('#ad-body', view);
-    ({ general: general, users: users, roles: roles, catalog: catalog, doctors: doctors, wards: wards, years: years, system: system })[tab](body);
+    ({ general: general, users: users, roles: roles, catalog: catalog, pricing: pricing, doctors: doctors, wards: wards, years: years, system: system })[tab](body);
   };
 
   var HIDDEN_SETTINGS = ['CLINIC_LOGO_DATA', 'CLINIC_LOGO_FILE_ID', 'CLINIC_WATERMARK_FILE_ID', 'WATERMARK_ENABLED', 'WATERMARK_OPACITY', 'DB_MAX_ORDER_ROWS', 'DB_MAX_RESULT_ROWS'];   // chỉnh ở tab riêng
@@ -532,7 +543,15 @@
               return '<td><input class="form-check-input" type="checkbox" data-role="' + r.RoleCode + '" data-perm="' + p.key + '"' + (all || r.Permissions.indexOf(p.key) > -1 ? ' checked' : '') + (all ? ' disabled title="Toàn quyền"' : '') + '></td>';
             }).join('') + '</tr>';
           }).join('');
-        }).join('') + '</tbody></table></div><div class="card-footer bg-white d-flex gap-2 justify-content-end">' +
+        }).join('') +
+        '<tr class="table-light"><td colspan="' + (d.roles.length + 1) + '" class="small fw-semibold text-uppercase text-muted">Chỉ Quản trị hệ thống</td></tr>' +
+        ['Cấu hình chung (thông tin phòng XN, logo, in ấn)', 'Tài khoản', 'Vai trò & quyền', 'Kết nối dữ liệu năm', 'Hệ thống (cache, bảo trì)'].map(function (lb) {
+          return '<tr class="text-muted"><td>' + lb + '</td>' + d.roles.map(function (r) {
+            var all = r.Permissions.indexOf('*') > -1;
+            return '<td>' + (all ? '<i class="bi bi-check-lg text-success"></i>' : '<i class="bi bi-lock small" title="Chỉ vai trò Quản trị hệ thống"></i>') + '</td>';
+          }).join('') + '</tr>';
+        }).join('') +
+        '</tbody></table></div><div class="card-footer bg-white d-flex gap-2 justify-content-end">' +
         d.roles.filter(function (r) { return r.Permissions.indexOf('*') === -1; }).map(function (r) { return '<button class="btn btn-sm btn-primary" data-save-role="' + r.RoleCode + '">Lưu ' + esc(r.RoleCode) + '</button>'; }).join('') + '</div></div>';
       U.on(body, 'click', '[data-save-role]', function (e, el) {
         var code = el.getAttribute('data-save-role');
@@ -555,8 +574,149 @@
     }).catch(function () {});
   }
 
+  /* ---------------------------------------------------------------- GIÁ & CHIẾT KHẤU (quyền admin.price) */
+  function pricing(body) {
+    var TIER = { ALL: 'Tất cả hạng', NORMAL: 'Thường', VIP: 'VIP', VVIP: 'VVIP' };
+    var data = null, filter = '';
+    var today = U.today();
+    function status(r) {
+      if (!r.IsActive) return '<span class="st st-UNPAID">Tắt</span>';
+      if (r.FromDate && r.FromDate > today) return '<span class="st st-IN_PROGRESS">Chưa đến ngày</span>';
+      if (r.ToDate && r.ToDate < today) return '<span class="st st-CANCELLED">Hết hạn</span>';
+      return '<span class="st st-COMPLETED">Đang áp dụng</span>';
+    }
+    function level(r) { return r.Mode === 'PERCENT' ? r.Value + '%' : U.money(r.Value); }
+    function panelName(c) { return c === '*' ? 'Mọi nhóm XN' : ((App.panel(c) || {}).PanelName || c); }
+    function render() {
+      var cat = App.state.catalog;
+      var rules = data.rules.slice().sort(function (a, b) { return a.Kind === b.Kind ? (a.RuleID < b.RuleID ? -1 : 1) : (a.Kind === 'RETURN' ? -1 : 1); });
+      body.innerHTML = '<div class="row g-3"><div class="col-xl-7">' +
+        '<div class="card mb-3"><div class="card-header justify-content-between"><span><i class="bi bi-magic"></i> Quy tắc chiết khấu tự động</span>' +
+          '<button class="btn btn-sm btn-primary" id="kr-new"><i class="bi bi-plus-lg"></i> Thêm quy tắc</button></div>' +
+        (rules.length ? '<div class="table-wrap"><table class="table table-sm align-middle mb-0"><thead><tr><th>Mã</th><th>Loại</th><th>Áp dụng cho</th><th class="text-end">Mức giảm</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead><tbody>' +
+          rules.map(function (r) {
+            return '<tr><td class="mono small">' + esc(r.RuleID) + '</td><td class="text-nowrap small">' + (r.Kind === 'RETURN' ? '<i class="bi bi-arrow-repeat"></i> Tái khám' : '<i class="bi bi-collection"></i> Nhóm XN') + '</td>' +
+              '<td class="small">' + (r.Kind === 'PANEL' ? esc(panelName(r.PanelCode)) + '<br>' : '') + '<span class="text-muted">' + esc(TIER[r.Tier] || r.Tier) + '</span></td>' +
+              '<td class="text-end fw-semibold tabular">' + level(r) + '</td>' +
+              '<td class="small text-nowrap">' + U.vnDate(r.FromDate) + ' → ' + (r.ToDate ? U.vnDate(r.ToDate) : '<span class="text-muted">không thời hạn</span>') + '</td>' +
+              '<td>' + status(r) + '</td><td class="text-nowrap"><button class="btn btn-sm btn-light" data-kedit="' + esc(r.RuleID) + '" title="Sửa"><i class="bi bi-pencil"></i></button> ' +
+              '<button class="btn btn-sm btn-light text-danger" data-kdel="' + esc(r.RuleID) + '" title="Xóa"><i class="bi bi-trash"></i></button></td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="card-body">' + U.empty('Chưa có quy tắc. Bấm "Thêm quy tắc" để tạo giảm giá tái khám hoặc khuyến mãi theo nhóm XN.', 'bi-tags') + '</div>') + '</div>' +
+        '<div class="card mb-3"><div class="card-header">Cách tính</div><div class="card-body"><form id="ks-form" class="row g-3 align-items-end">' +
+          '<div class="col-md-7"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ks-stack"' + (data.settings.stack ? ' checked' : '') + '>' +
+            '<label class="form-check-label" for="ks-stack"><b>Cộng dồn</b> KM nhóm XN và giảm tái khám</label></div><div class="form-text">Tắt = chỉ áp dụng mức giảm có lợi hơn cho khách.</div></div>' +
+          '<div class="col-md-3"><label class="form-label" for="ks-round">Làm tròn tiền giảm</label><select class="form-select" id="ks-round">' +
+            [1, 500, 1000, 5000, 10000].map(function (v) { return '<option value="' + v + '"' + (data.settings.round === v ? ' selected' : '') + '>' + (v === 1 ? 'Không làm tròn' : U.num(v) + ' đ') + '</option>'; }).join('') + '</select></div>' +
+          '<div class="col-md-2 text-end"><button class="btn btn-outline-primary" type="submit">Lưu</button></div></form></div></div>' +
+        '<div class="alert alert-light border small mb-0"><b>Cách áp dụng khi tạo phiếu:</b><ul class="mb-0 ps-3">' +
+          '<li><b>KM theo nhóm XN</b> tính trên tiền từng nhóm trong thời gian hiệu lực (để trống "Đến ngày" = không thời hạn). Nhiều quy tắc khớp → lấy mức có lợi nhất.</li>' +
+          '<li><b>Tái khám</b>: bệnh nhân đã có phiếu (chưa hủy) với ngày khám trước đó → giảm theo <b>hạng</b> (Thường / VIP / VVIP) trên phần tổng còn lại.</li>' +
+          '<li>Chiết khấu tự điền vào phiếu kèm chi tiết; người có quyền vẫn sửa tay được, và có nút "↺ Tính tự động" để áp lại quy tắc.</li>' +
+          '<li>Đổi hạng bệnh nhân trong hồ sơ BN (cần quyền "Sửa đơn giá / chiết khấu").</li></ul></div></div>' +
+        // ---- Bảng giá
+        '<div class="col-xl-5"><div class="card"><div class="card-header justify-content-between flex-wrap gap-2"><span><i class="bi bi-cash-coin"></i> Bảng giá</span>' +
+          '<div class="d-flex gap-2"><input class="form-control form-control-sm" id="pp-q" placeholder="Lọc tên / mã…" style="width:150px" value="' + esc(filter) + '">' +
+          '<button class="btn btn-sm btn-primary" id="pp-save"><i class="bi bi-save"></i> Lưu bảng giá</button></div></div>' +
+          '<div style="max-height:70vh;overflow:auto"><table class="table table-sm align-middle mb-0 price-table"><tbody>' +
+          cat.panels.map(function (p) {
+            var tests = App.testsOfPanel(p.PanelCode);
+            return '<tr class="table-light" data-prow="' + p.PanelCode + '"><td colspan="2"><b>' + esc(p.PanelName) + '</b> <span class="mono small text-muted">' + p.PanelCode + '</span>' +
+              '<select class="form-select form-select-sm d-inline-block w-auto ms-2" data-pmode="' + p.PanelCode + '"><option value="TEST"' + (p.PricingMode !== 'PANEL' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Trọn gói</option></select></td>' +
+              '<td style="width:130px"><input class="form-control form-control-sm text-end tabular" data-pprice="' + p.PanelCode + '" value="' + U.num(p.Price || 0) + '"' + (p.PricingMode === 'PANEL' ? '' : ' disabled') + '></td></tr>' +
+              tests.map(function (t) {
+                return '<tr data-trow="' + t.TestCode + '" data-k="' + esc(U.esc(t.TestName + ' ' + t.TestCode + ' ' + p.PanelName).toLowerCase()) + '"><td class="ps-4 small">' + esc(t.TestName) + '</td><td class="mono small text-muted">' + t.TestCode + '</td>' +
+                  '<td><input class="form-control form-control-sm text-end tabular" data-tprice="' + t.TestCode + '" value="' + U.num(t.Price || 0) + '"></td></tr>';
+              }).join('');
+          }).join('') + '</tbody></table></div><div class="card-footer bg-white small text-muted">Chỉ số dùng chung nhiều nhóm có cùng 1 đơn giá. Nhóm "Trọn gói" tính theo giá nhóm.</div></div></div></div>';
+      applyFilter();
+    }
+    function applyFilter() {
+      var q = filter.trim().toLowerCase();
+      U.$$('tr[data-trow]', body).forEach(function (tr) { tr.style.display = !q || tr.getAttribute('data-k').indexOf(q) > -1 ? '' : 'none'; });
+    }
+    function ruleModal(r) {
+      var isNew = !r;
+      r = r || { Kind: 'RETURN', Tier: 'NORMAL', PanelCode: '', Mode: 'PERCENT', Value: '', FromDate: today, ToDate: '', IsActive: true, Note: '' };
+      var cat = App.state.catalog;
+      var m = U.modal('<div class="modal-header"><h5 class="modal-title">' + (isNew ? 'Thêm quy tắc chiết khấu' : 'Sửa ' + esc(r.RuleID)) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
+        '<div class="modal-body"><form id="kr-form" class="row g-3">' +
+          '<div class="col-12"><label class="form-label">Loại</label><div class="d-flex gap-3">' +
+            '<div class="form-check"><input class="form-check-input" type="radio" name="Kind" id="kk1" value="RETURN"' + (r.Kind === 'RETURN' ? ' checked' : '') + '><label class="form-check-label" for="kk1">Giảm khi <b>tái khám</b> (lần 2 trở đi)</label></div>' +
+            '<div class="form-check"><input class="form-check-input" type="radio" name="Kind" id="kk2" value="PANEL"' + (r.Kind === 'PANEL' ? ' checked' : '') + '><label class="form-check-label" for="kk2">Giảm theo <b>nhóm XN</b></label></div></div></div>' +
+          '<div class="col-md-6" id="kr-panel"><label class="form-label">Nhóm xét nghiệm</label><select class="form-select" name="PanelCode"><option value="*"' + (r.PanelCode === '*' ? ' selected' : '') + '>Mọi nhóm XN</option>' +
+            cat.panels.map(function (p) { return '<option value="' + p.PanelCode + '"' + (r.PanelCode === p.PanelCode ? ' selected' : '') + '>' + esc(p.PanelName) + ' (' + p.PanelCode + ')</option>'; }).join('') + '</select></div>' +
+          '<div class="col-md-6"><label class="form-label">Hạng bệnh nhân</label><select class="form-select" name="Tier">' +
+            Object.keys(TIER).map(function (k) { return '<option value="' + k + '"' + (r.Tier === k ? ' selected' : '') + '>' + TIER[k] + '</option>'; }).join('') + '</select></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Kiểu giảm</label><select class="form-select" name="Mode"><option value="PERCENT"' + (r.Mode === 'PERCENT' ? ' selected' : '') + '>%</option><option value="AMOUNT"' + (r.Mode === 'AMOUNT' ? ' selected' : '') + '>Số tiền</option></select></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Mức giảm</label><input class="form-control tabular" name="Value" inputmode="decimal" required value="' + esc(r.Value) + '"></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Từ ngày</label><input type="date" class="form-control" name="FromDate" required value="' + esc(r.FromDate || today) + '"></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Đến ngày</label><input type="date" class="form-control" name="ToDate" value="' + esc(r.ToDate || '') + '"><div class="form-text">Trống = không thời hạn</div></div>' +
+          '<div class="col-md-8"><label class="form-label">Ghi chú</label><input class="form-control" name="Note" value="' + esc(r.Note || '') + '" placeholder="vd Khuyến mãi tháng 11"></div>' +
+          '<div class="col-md-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="kr-act"' + (r.IsActive ? ' checked' : '') + '><label class="form-check-label" for="kr-act">Đang áp dụng</label></div></div>' +
+        '</form></div><div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Đóng</button><button class="btn btn-primary" id="kr-save">Lưu quy tắc</button></div>', { size: 'lg' });
+      var f = m.body.querySelector('#kr-form');
+      var sync = function () { m.body.querySelector('#kr-panel').style.display = f.querySelector('input[name="Kind"]:checked').value === 'PANEL' ? '' : 'none'; };
+      U.$$('input[name="Kind"]', f).forEach(function (x) { x.onchange = sync; });
+      sync();
+      m.body.querySelector('#kr-save').onclick = function () {
+        if (!f.reportValidity()) return;
+        var d = U.formData(f);
+        if (!isNew) d.RuleID = r.RuleID;
+        if (d.Kind !== 'PANEL') d.PanelCode = '';
+        d.Value = String(d.Value).replace(/\./g, '').replace(',', '.');
+        U.api('admin.discount.save', { rule: d }).then(function (res) { data = res; m.hide(); U.toast('Đã lưu quy tắc'); return refreshCatalog(); }).catch(function () {});
+      };
+    }
+    function refreshCatalog() { return U.api('catalog.get').then(function (c) { App.setCatalog(c); render(); }); }
+    function load() {
+      U.api('admin.discount.list').then(function (d) { data = d; render(); }).catch(function () {});
+    }
+    U.on(body, 'click', '#kr-new', function () { ruleModal(null); });
+    U.on(body, 'click', '[data-kedit]', function (e, el) { ruleModal(data.rules.filter(function (r) { return r.RuleID === el.getAttribute('data-kedit'); })[0]); });
+    U.on(body, 'click', '[data-kdel]', function (e, el) {
+      var id = el.getAttribute('data-kdel');
+      U.confirm('Xóa quy tắc ' + id, 'Phiếu đã tạo giữ nguyên chiết khấu cũ. Phiếu mới sẽ không áp dụng quy tắc này nữa.', 'Xóa', true).then(function (ok) {
+        if (ok) U.api('admin.discount.delete', { RuleID: id }).then(function (res) { data = res; U.toast('Đã xóa ' + id); return refreshCatalog(); }).catch(function () {});
+      });
+    });
+    U.on(body, 'submit', '#ks-form', function (e) {
+      e.preventDefault();
+      U.api('admin.discount.settings', { stack: U.$('#ks-stack', body).checked, round: Number(U.$('#ks-round', body).value) }).then(function (res) {
+        data = res; App.state.settings.DISCOUNT_STACK = res.settings.stack ? 'TRUE' : 'FALSE'; App.state.settings.DISCOUNT_ROUND = String(res.settings.round);
+        U.toast('Đã lưu cách tính chiết khấu'); render();
+      }).catch(function () {});
+    });
+    U.on(body, 'input', '#pp-q', function (e) { filter = e.target.value; applyFilter(); });
+    U.on(body, 'change', '[data-pmode]', function (e, el) {
+      var inp = U.$('[data-pprice="' + el.getAttribute('data-pmode') + '"]', body);
+      inp.disabled = el.value !== 'PANEL';
+    });
+    U.on(body, 'click', '#pp-save', function (e, el) {
+      var num = function (v) { return Number(String(v).replace(/\D/g, '')) || 0; };
+      var cat = App.state.catalog;
+      var panels = cat.panels.map(function (p) {
+        return { PanelCode: p.PanelCode, PricingMode: U.$('[data-pmode="' + p.PanelCode + '"]', body).value, Price: num(U.$('[data-pprice="' + p.PanelCode + '"]', body).value) };
+      }).filter(function (x) { var p = App.panel(x.PanelCode); return p.PricingMode !== x.PricingMode || Number(p.Price || 0) !== x.Price; });
+      var seen = {}, tests = [];
+      U.$$('[data-tprice]', body).forEach(function (inp) { var c = inp.getAttribute('data-tprice'); if (!seen[c]) seen[c] = inp; });   // các ô cùng mã đã đồng bộ khi gõ
+      Object.keys(seen).forEach(function (c) { var v = num(seen[c].value); if (v !== Number(App.test(c).Price || 0)) tests.push({ TestCode: c, Price: v }); });
+      if (!panels.length && !tests.length) { U.toast('Chưa có thay đổi giá', 'warn'); return; }
+      el.disabled = true;
+      U.api('admin.price.save', { panels: panels, tests: tests }).then(function (r) { App.setCatalog(r.catalog); U.toast('Đã cập nhật ' + r.changed + ' mục giá'); render(); })
+        .catch(function () {}).finally(function () { el.disabled = false; });
+    });
+    // chỉ số xuất hiện ở nhiều nhóm: gõ ở 1 chỗ → đồng bộ các ô cùng mã
+    U.on(body, 'input', '[data-tprice]', function (e, el) {
+      var c = el.getAttribute('data-tprice');
+      U.$$('[data-tprice="' + c + '"]', body).forEach(function (x) { if (x !== el) x.value = el.value; });
+    });
+    load();
+  }
+
   function catalog(body) {
     var cat = App.state.catalog;
+    var canP = App.can('admin.price');   // giá chỉ sửa được khi có quyền Bảng giá (thẻ Giá & chiết khấu)
+    var lockP = canP ? '' : ' disabled title="Cần quyền Bảng giá & chiết khấu"';
     var sel = cat.panels[0] ? cat.panels[0].PanelCode : null;
     function render() {
       cat = App.state.catalog;
@@ -586,8 +746,8 @@
         '<div class="col-3"><label class="form-label">Thứ tự</label><input class="form-control" name="SortOrder" value="' + esc(p.SortOrder) + '"></div>' +
         '<div class="col-6"><label class="form-label">Tiêu đề phiếu in</label><input class="form-control" name="PrintTitle" value="' + esc(p.PrintTitle || '') + '"></div>' +
         '<div class="col-6"><label class="form-label">Phụ đề phiếu in</label><input class="form-control" name="PrintSubtitle" value="' + esc(p.PrintSubtitle || '') + '"></div>' +
-        '<div class="col-4"><label class="form-label">Cách tính giá</label><select class="form-select" name="PricingMode"><option value="TEST"' + (p.PricingMode === 'TEST' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Giá trọn gói nhóm</option></select></div>' +
-        '<div class="col-4"><label class="form-label">Giá nhóm (đ)</label><input class="form-control tabular" name="Price" value="' + esc(p.Price || 0) + '"></div>' +
+        '<div class="col-4"><label class="form-label">Cách tính giá</label><select class="form-select" name="PricingMode"' + lockP + '><option value="TEST"' + (p.PricingMode === 'TEST' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Giá trọn gói nhóm</option></select></div>' +
+        '<div class="col-4"><label class="form-label">Giá nhóm (đ)</label><input class="form-control tabular" name="Price" value="' + esc(p.Price || 0) + '"' + lockP + '></div>' +
         '<div class="col-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="p-act"' + (p.IsActive ? ' checked' : '') + '><label class="form-check-label" for="p-act">Đang sử dụng</label></div></div>' +
         '<div class="col-4"><label class="form-label">Khổ giấy in</label><select class="form-select" name="PageSize">' +
           [['', 'Theo cấu hình chung (' + esc(App.setting('PRINT_PAGE_SIZE', 'A5')) + ')'], ['A4', 'A4'], ['A5', 'A5']].map(function (o2) { return '<option value="' + o2[0] + '"' + ((p.PageSize || '') === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select></div>' +
@@ -621,7 +781,7 @@
         '<div class="col-4"><label class="form-label">Kiểu kết quả</label><select class="form-select" name="ResultType">' + [['NUM', 'Số (có ngưỡng)'], ['QUAL', 'Âm/Dương tính'], ['BLOOD', 'Nhóm máu'], ['TEXT', 'Văn bản']].map(function (o) {
           return '<option value="' + o[0] + '"' + (t.ResultType === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
         '<div class="col-4"><label class="form-label">Đơn vị</label><input class="form-control" name="Unit" value="' + esc(v(t.Unit)) + '"></div>' +
-        '<div class="col-4"><label class="form-label">Đơn giá (đ)</label><input class="form-control tabular" name="Price" value="' + esc(v(t.Price)) + '"></div>' +
+        '<div class="col-4"><label class="form-label">Đơn giá (đ)</label><input class="form-control tabular" name="Price" value="' + esc(v(t.Price)) + '"' + lockP + '></div>' +
         '<div class="col-3"><label class="form-label">Nam – Min</label><input class="form-control" name="RefMinM" value="' + esc(v(t.RefMinM)) + '"></div>' +
         '<div class="col-3"><label class="form-label">Nam – Max</label><input class="form-control" name="RefMaxM" value="' + esc(v(t.RefMaxM)) + '"></div>' +
         '<div class="col-3"><label class="form-label">Nữ – Min</label><input class="form-control" name="RefMinF" value="' + esc(v(t.RefMinF)) + '"></div>' +
