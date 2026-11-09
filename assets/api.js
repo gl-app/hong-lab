@@ -10,6 +10,12 @@
   var DEMO_KEY = 'lis_demo_state_v9';
   var token = null;
   try { token = sessionStorage.getItem(TOKEN_KEY); } catch (e) { /* storage unavailable */ }
+  // Tab mới mở từ trong ứng dụng (Lịch sử, Tra cứu phiếu cũ…): nhận phiên do tab gốc trao qua localStorage (chỉ hiệu lực 20 giây, dùng 1 lần)
+  try {
+    var ho = JSON.parse(localStorage.getItem('lis_handoff') || 'null');
+    if (ho) localStorage.removeItem('lis_handoff');
+    if (!token && ho && ho.t && Date.now() - ho.at < 20000) { token = ho.t; sessionStorage.setItem(TOKEN_KEY, token); }
+  } catch (e) { /* ignore */ }
 
   var isDemo = String(cfg.API_URL).toUpperCase() === 'DEMO';
   var demoReady = null;
@@ -24,9 +30,9 @@
 
   function initDemo() {
     if (demoReady) return demoReady;
-    demoReady = loadScript('assets/gas-shim.js?v=2.1.3')
-      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.1.3'); })
-      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.1.3'); })
+    demoReady = loadScript('assets/gas-shim.js?v=2.1.4')
+      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.1.4'); })
+      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.1.4'); })
       .then(function () {
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch (e) { saved = null; }

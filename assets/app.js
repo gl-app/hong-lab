@@ -185,7 +185,12 @@
     });
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.1.3';   // phiên bản giao diện (so với máy chủ ở Quản trị → Hệ thống)
+  App.FE_VERSION = '2.1.4';
+  /** Mở 1 màn hình của ứng dụng ở tab mới, giữ nguyên phiên đăng nhập (không phải đăng nhập lại). */
+  App.openTab = function (hash) {
+    try { localStorage.setItem('lis_handoff', JSON.stringify({ t: Api.getToken(), at: Date.now() })); } catch (e) { /* ignore */ }
+    window.open(location.pathname + location.search + hash, '_blank', 'noopener');   // mọi trình duyệt cùng 1 cách: phiên trao qua lis_handoff
+  };   // phiên bản giao diện (so với máy chủ ở Quản trị → Hệ thống)
   App.RANGE_DEFAULTS = { SEARCH_DEFAULT_DAYS: 30, SEARCH_MAX_DAYS: 366, REPORT_MAX_DAYS: 731, HISTORY_DEFAULT_YEARS: 0, RECENT_VISIT_YEARS: 1 };
   App.rangeSetting = function (k) {
     var v = Number(String(App.setting(k, '')).replace(/[^\d]/g, ''));

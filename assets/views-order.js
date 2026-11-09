@@ -211,8 +211,10 @@
       ptBox.innerHTML = '<div class="patient-selected">' + patientLine(p) + '</div><div class="d-flex gap-2 mt-2">' +
         '<button class="btn btn-sm btn-light" id="pt-change"><i class="bi bi-arrow-left-right"></i> Đổi bệnh nhân</button>' +
         (App.can('patient.edit') ? '<button class="btn btn-sm btn-light" id="pt-edit"><i class="bi bi-pencil"></i> Sửa thông tin</button>' : '') +
-        (App.can('history.view') ? '<a class="btn btn-sm btn-light" href="#/patient/' + esc(p.PatientID) + '" target="_blank"><i class="bi bi-clock-history"></i> Lịch sử</a>' : '') + '</div>' +
+        (App.can('history.view') ? '<a class="btn btn-sm btn-light" href="#/patient/' + esc(p.PatientID) + '" id="pt-hist"><i class="bi bi-clock-history"></i> Lịch sử</a>' : '') + '</div>' +
         '<div id="pt-last" class="mt-3"></div>';
+      var ph = U.$('#pt-hist', ptBox);
+      if (ph) ph.onclick = function (e) { e.preventDefault(); App.openTab('#/patient/' + p.PatientID); };   // tab mới, giữ phiên + phiếu đang nhập
       st.priorDates = []; st.discManual = false; recalc();
       U.$('#pt-last', ptBox).innerHTML = '<div class="small text-muted"><span class="spinner-border spinner-border-sm"></span> Đang tải lần khám gần đây…</div>';
       // Chỉ tải lần khám năm nay + RECENT_VISIT_YEARS năm trước (không quét DB các năm cũ) – năm cũ hơn xem ở Tra cứu phiếu
@@ -240,7 +242,7 @@
           var yy = ol.getAttribute('data-y');
           // Mở tab mới (giữ nguyên phiếu đang nhập), điền sẵn: mã BN + năm của lần khám cũ gần nhất
           try { localStorage.setItem('lis_search_prefill', JSON.stringify({ q: p.PatientID, from: yy + '-01-01', to: yy + '-12-31', status: '', panelCode: '', doctor: '' })); } catch (x) { /* ignore */ }
-          window.open(location.pathname + location.search + '#/order-search', '_blank');
+          App.openTab('#/order-search');
         };
       }).catch(function () { U.$('#pt-last', ptBox).innerHTML = ''; });
       refreshResults();
