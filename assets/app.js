@@ -173,6 +173,43 @@
     setting: function (k, d) { var v = (App.state.settings || {})[k]; return v === undefined || v === '' ? d : v; }
   };
 
+  /* ================================================================ PHẠM VI ĐỌC DB THEO KHOẢNG NGÀY */
+  /** Giống YearDb.inRange ở máy chủ: lọc theo năm, rồi theo khoảng ngày thực có của DB đã đầy/khóa sổ. */
+  App.dbScope = function (from, to) {
+    var ys = App.state.years || [];
+    var a = Number(String(from || '').slice(0, 4)) || 1900, b = Number(String(to || '').slice(0, 4)) || 9999;
+    var list = ys.filter(function (r) {
+      if (r.Year < a || r.Year > b) return false;
+      if (r.Mode === 'RW' || !r.MinDate || !r.MaxDate) return true;
+      return !((from && r.MaxDate < from) || (to && r.MinDate > to));
+    });
+    return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
+  };
+  App.FE_VERSION = '2.1.3';   // phiên bản giao diện (so với máy chủ ở Quản trị → Hệ thống)
+  App.RANGE_DEFAULTS = { SEARCH_DEFAULT_DAYS: 30, SEARCH_MAX_DAYS: 366, REPORT_MAX_DAYS: 731, HISTORY_DEFAULT_YEARS: 0, RECENT_VISIT_YEARS: 1 };
+  App.rangeSetting = function (k) {
+    var v = Number(String(App.setting(k, '')).replace(/[^\d]/g, ''));
+    return String(App.setting(k, '')).trim() !== '' && isFinite(v) ? v : App.RANGE_DEFAULTS[k];
+  };
+  /** Dòng gợi ý dưới bộ lọc ngày: số ngày · số DB phải đọc · cảnh báo vượt giới hạn. Trả { html, ok }. */
+  App.scopeInfo = function (from, to, maxKey) {
+    if (!from || !to) return { ok: true, html: '' };
+    if (from > to) return { ok: false, html: '<span class="text-danger"><i class="bi bi-exclamation-circle"></i> Từ ngày phải trước hoặc bằng Đến ngày</span>' };
+    var days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1, max = App.rangeSetting(maxKey);
+    var s = App.dbScope(from, to), over = max > 0 && days > max;
+    return { ok: !over, html: '<span class="' + (over ? 'text-danger' : 'text-muted') + '"><i class="bi bi-database"></i> ' + U.num(days) + ' ngày · đọc ' + s.dbs + '/' + s.total + ' DB' +
+      (s.names.length ? ' <span class="opacity-75">(' + U.esc(s.names.join(', ')) + ')</span>' : '') +
+      (over ? ' — vượt giới hạn ' + U.num(max) + ' ngày, hãy thu hẹp khoảng ngày' : '') + '</span>' };
+  };
+  /** Gắn gợi ý phạm vi vào 2 ô ngày; trả hàm kiểm tra trước khi gửi (false = đang vượt giới hạn). */
+  App.bindScope = function (fromEl, toEl, hintEl, maxKey) {
+    var upd = function () { var i = App.scopeInfo(fromEl.value, toEl.value, maxKey); hintEl.innerHTML = i.html; return i.ok; };
+    fromEl.addEventListener('change', upd); toEl.addEventListener('change', upd);
+    fromEl.addEventListener('input', upd); toEl.addEventListener('input', upd);
+    upd();
+    return upd;
+  };
+
   /* ================================================================ PATIENT INDEX (client-side search) */
   /**
    * Danh bạ BN rút gọn tải 1 lần / phiên (sessionStorage, xóa khi đăng xuất / đóng tab),

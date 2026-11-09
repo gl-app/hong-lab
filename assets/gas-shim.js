@@ -124,6 +124,8 @@
     STORE.dirty = true;
     return this;
   };
+  Range.prototype.getValue = function () { return this.getValues()[0][0]; };
+  Range.prototype.setValue = function (v) { return this.setValues([[v]]); };
   Range.prototype.clearContent = function () {
     var blank = [];
     for (var r = 0; r < this.nr; r++) { var l = []; for (var c = 0; c < this.nc; c++) l.push(''); blank.push(l); }

@@ -201,6 +201,7 @@
       presets.map(function (p, i) { return '<button class="btn btn-light" data-preset="' + i + '">' + p[0] + '</button>'; }).join('') +
       (App.can('report.export') ? '<div class="ms-auto d-flex gap-2 align-items-center"><div class="form-check mb-0"><input class="form-check-input" type="checkbox" id="r-incres"><label class="form-check-label small" for="r-incres">Kèm kết quả chi tiết</label></div>' +
         '<button class="btn btn-outline-primary" id="r-export"><i class="bi bi-file-earmark-excel"></i> Xuất Excel</button></div>' : '') +
+      '<div class="w-100 small scope-hint" id="r-scope"></div>' +
       '</div></div><div id="r-body"></div>';
 
     function prevMonth(d) {
@@ -210,8 +211,10 @@
       var last = new Date(y, m, 0).getDate();
       return [y + '-' + mm + '-01', y + '-' + mm + '-' + last];
     }
+    var scopeOk = App.bindScope(U.$('#r-from', view), U.$('#r-to', view), U.$('#r-scope', view), 'REPORT_MAX_DAYS');
     function load() {
       st.from = U.$('#r-from', view).value; st.to = U.$('#r-to', view).value;
+      if (!scopeOk()) { U.toast('Khoảng ngày vượt giới hạn thống kê – thu hẹp lại', 'warn'); return; }
       App._reportState = st;
       var body = U.$('#r-body', view);
       body.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
@@ -265,9 +268,10 @@
       }).catch(function () { body.innerHTML = U.empty('Lỗi tải báo cáo', 'bi-exclamation-triangle'); });
     }
     U.$('#r-go', view).onclick = load;
-    U.on(view, 'click', '[data-preset]', function (e, el) { var p = presets[+el.getAttribute('data-preset')]; U.$('#r-from', view).value = p[1]; U.$('#r-to', view).value = p[2]; load(); });
+    U.on(view, 'click', '[data-preset]', function (e, el) { var p = presets[+el.getAttribute('data-preset')]; U.$('#r-from', view).value = p[1]; U.$('#r-to', view).value = p[2]; scopeOk(); load(); });
     var ex = U.$('#r-export', view);
     if (ex) ex.onclick = function () {
+      if (!scopeOk()) { U.toast('Khoảng ngày vượt giới hạn – thu hẹp lại trước khi xuất', 'warn'); return; }
       ex.disabled = true;
       U.api('report.export', { from: U.$('#r-from', view).value, to: U.$('#r-to', view).value, includeResults: U.$('#r-incres', view).checked })
         .then(function (d) { return App.Users.load().catch(function () { return []; }).then(function () { App.exportXlsx(d); }); }).catch(function () {}).finally(function () { ex.disabled = false; });
@@ -890,15 +894,17 @@
         '<button class="btn btn-sm btn-light" id="y-cap"><i class="bi bi-speedometer2"></i> Đo dung lượng</button>' +
         '<button class="btn btn-sm btn-light" id="y-opt" title="Xóa cột/dòng trống thừa ở mọi bảng: Config, Customers, các DB năm"><i class="bi bi-scissors"></i> Tối ưu dung lượng</button>' +
         '<button class="btn btn-sm btn-primary" id="y-create"><i class="bi bi-plus-lg"></i> Tạo DB mới</button></div></div>' +
-        '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Số dòng / ngưỡng</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Số dòng / ngưỡng</th><th title="Ngày khám sớm nhất – muộn nhất có trong DB. Tra cứu/thống kê ngoài khoảng này không phải đọc DB đó">Khoảng ngày</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
         list.map(function (y) {
           return '<tr><td class="fw-bold">' + y.Year + '</td><td><a class="small" href="https://docs.google.com/spreadsheets/d/' + esc(y.SpreadsheetId) + '" target="_blank" rel="noopener">' + esc(y.Note || y.SpreadsheetId.substring(0, 12)) + ' <i class="bi bi-box-arrow-up-right"></i></a></td>' +
             '<td>' + (modeLabel[y.Mode] || esc(y.Mode)) + '</td><td>' + bar(y.UsedPercent || 0) + '<div class="small text-muted tabular">' + U.num(y.UsedCells) + ' ô</div></td>' +
             '<td>' + rowsLine('Phiếu', y.OrderRows || 0, lim.orders) + rowsLine('Kết quả', y.ResultRows || 0, lim.results) + '</td>' +
+            '<td class="small tabular">' + (y.MinDate ? U.vnDate(y.MinDate) + '<br>→ ' + (y.Mode === 'RW' ? '<span class="text-muted">đang ghi</span>' : U.vnDate(y.MaxDate)) : '<span class="text-muted">–</span>') + '</td>' +
             '<td class="small text-muted">' + U.vnDateTime(y.CheckedAt) + '</td><td><button class="btn btn-sm btn-light" data-yedit="' + esc(y.SpreadsheetId) + '"><i class="bi bi-pencil"></i></button></td></tr>';
         }).join('') + '</tbody></table></div></div>' +
         '<div class="alert alert-light border small mt-3 mb-0"><b>Cách hệ thống xử lý:</b><ul class="mb-0 ps-3">' +
-          '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê tự gộp mọi DB của các năm liên quan.</li>' +
+          '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê chỉ đọc các DB có <b>khoảng ngày</b> giao với khoảng đang chọn.</li>' +
+          '<li>Hồ sơ bệnh nhân giữ sẵn danh sách lần khám → mở hồ sơ không phải đọc DB năm; lịch sử chỉ số chỉ đọc đúng các DB bệnh nhân có khám.</li>' +
           '<li><b>Sang năm mới:</b> phiếu đầu tiên của năm tự tạo <span class="kbd">DB_' + (thisYear + 1) + '</span> (cùng thư mục Drive với DB cũ). Từ 15/12 hệ thống tạo sẵn DB năm sau. DB năm cũ giữ nguyên.</li>' +
           '<li><b>DB đầy:</b> khi DB đang ghi chạm <b>ngưỡng số dòng</b> (Phiếu hoặc Kết quả, chỉnh bên phải) hoặc 85% dung lượng ô, hệ thống tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>); DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
           '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li>' +
@@ -974,11 +980,27 @@
   function system(body) {
     body.innerHTML = '<div class="row g-3"><div class="col-md-6"><div class="card"><div class="card-body"><h6>Bộ nhớ đệm (cache)</h6><p class="small text-muted">Danh mục, cấu hình, vai trò và kết nối năm được cache 6 giờ để tăng tốc. Xóa cache nếu bạn sửa trực tiếp trên Google Sheet.</p>' +
       '<button class="btn btn-outline-primary" id="sy-cache"><i class="bi bi-arrow-repeat"></i> Xóa cache & tải lại danh mục</button></div></div></div>' +
-      '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Thông tin</h6><div class="small">Phiên bản: <b>' + esc((App.state.settings || {}).APP_VERSION || '1.0.0') + '</b><br>Chế độ: <b>' + (Api.isDemo ? 'DEMO (dữ liệu trong trình duyệt)' : 'Google Apps Script') + '</b><br>' +
+      '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Thông tin</h6><div class="small">Phiên bản máy chủ (Apps Script): <b>' + esc((App.state.settings || {}).APP_VERSION || 'không rõ – bản cũ') + '</b><br>Phiên bản giao diện (GitHub): <b>' + esc(App.FE_VERSION) + '</b>' +
+        ((App.state.settings || {}).APP_VERSION !== App.FE_VERSION ? '<br><span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Hai phiên bản khác nhau – kiểm tra lại bước cập nhật (dán Code.gs + Deploy New version, upload đủ file giao diện, tải lại trang bằng Ctrl+F5)</span>' : '') + '<br>Chế độ: <b>' + (Api.isDemo ? 'DEMO (dữ liệu trong trình duyệt)' : 'Google Apps Script') + '</b><br>' +
       'Kết nối năm: ' + App.state.years.map(function (y) { return y.Year + (y.Mode === 'RO' ? ' (RO)' : ''); }).join(', ') + '</div>' +
-      (Api.isDemo ? '<button class="btn btn-outline-danger mt-3" id="sy-reset"><i class="bi bi-trash"></i> Xóa dữ liệu DEMO & tạo lại</button>' : '') + '</div></div></div></div>';
+      (Api.isDemo ? '<button class="btn btn-outline-danger mt-3" id="sy-reset"><i class="bi bi-trash"></i> Xóa dữ liệu DEMO & tạo lại</button>' : '') + '</div></div></div>' +
+      '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Chỉ mục lần khám</h6><p class="small text-muted">Mỗi hồ sơ bệnh nhân lưu sẵn danh sách lần khám (cột VisitLog, sheet Patients) để mở hồ sơ, xem lịch sử và tính tái khám nhanh dù có nhiều DB năm. ' +
+        'Tự cập nhật khi tạo/sửa/hủy phiếu và tự đối soát lúc 01:00. Chỉ cần dựng lại khi đã sửa/nhập phiếu trực tiếp trên Google Sheet.</p>' +
+        '<div class="small mb-2" id="sy-vis">Đang kiểm tra…</div><button class="btn btn-outline-primary" id="sy-vis-btn"><i class="bi bi-diagram-3"></i> Dựng lại chỉ mục</button></div></div></div></div>';
     U.$('#sy-cache', body).onclick = function () {
       U.api('admin.cache.clear').then(function () { return U.api('catalog.get'); }).then(function (c) { App.setCatalog(c); U.toast('Đã làm mới'); }).catch(function () {});
+    };
+    var visBox = U.$('#sy-vis', body);
+    var showVis = function (v) {
+      visBox.innerHTML = v.ready ? '<span class="text-success"><i class="bi bi-check-circle"></i> Đang dùng</span> · dựng lúc ' + U.vnDateTime(v.builtAt) +
+        (v.visits !== undefined ? ' · ' + U.num(v.visits) + ' lần khám / ' + U.num(v.patients) + ' BN' : '') +
+        (v.dirty ? '<br><span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Có lần ghi chỉ mục lỗi lúc ' + U.vnDateTime(v.dirty) + ' – sẽ tự đối soát lúc 01:00 (hoặc dựng lại ngay)</span>' : '')
+        : '<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Chưa dựng</span> – hệ thống đang đọc mọi DB năm (chậm hơn). Bấm "Dựng lại chỉ mục" hoặc chạy setup.';
+    };
+    U.api('admin.visits.status', {}, { silent: true }).then(showVis).catch(function () { visBox.textContent = ''; });
+    U.$('#sy-vis-btn', body).onclick = function () {
+      var b = this; b.disabled = true; visBox.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang đọc các DB năm…';
+      U.api('admin.visits.rebuild', {}).then(function (v) { showVis(v); U.toast('Đã dựng chỉ mục: ' + U.num(v.visits) + ' lần khám'); }).catch(function () {}).finally(function () { b.disabled = false; });
     };
     var r = U.$('#sy-reset', body);
     if (r) r.onclick = function () { U.confirm('Xóa dữ liệu DEMO', 'Toàn bộ dữ liệu demo trong trình duyệt sẽ bị xóa và tạo lại.', 'Xóa', true).then(function (ok) { if (ok) Api.resetDemo(); }); };

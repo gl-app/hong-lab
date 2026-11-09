@@ -7,7 +7,7 @@
   'use strict';
   var cfg = global.LIS_CONFIG || { API_URL: 'DEMO' };
   var TOKEN_KEY = 'lis_token';
-  var DEMO_KEY = 'lis_demo_state_v8';
+  var DEMO_KEY = 'lis_demo_state_v9';
   var token = null;
   try { token = sessionStorage.getItem(TOKEN_KEY); } catch (e) { /* storage unavailable */ }
 
@@ -24,9 +24,9 @@
 
   function initDemo() {
     if (demoReady) return demoReady;
-    demoReady = loadScript('assets/gas-shim.js?v=2.0.0')
-      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.0.0'); })
-      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.0.0'); })
+    demoReady = loadScript('assets/gas-shim.js?v=2.1.3')
+      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.1.3'); })
+      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.1.3'); })
       .then(function () {
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch (e) { saved = null; }

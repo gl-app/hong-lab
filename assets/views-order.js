@@ -214,15 +214,35 @@
         (App.can('history.view') ? '<a class="btn btn-sm btn-light" href="#/patient/' + esc(p.PatientID) + '" target="_blank"><i class="bi bi-clock-history"></i> Lịch sử</a>' : '') + '</div>' +
         '<div id="pt-last" class="mt-3"></div>';
       st.priorDates = []; st.discManual = false; recalc();
-      U.api('patient.get', { patientId: p.PatientID }, { silent: true }).then(function (full) {
+      U.$('#pt-last', ptBox).innerHTML = '<div class="small text-muted"><span class="spinner-border spinner-border-sm"></span> Đang tải lần khám gần đây…</div>';
+      // Chỉ tải lần khám năm nay + RECENT_VISIT_YEARS năm trước (không quét DB các năm cũ) – năm cũ hơn xem ở Tra cứu phiếu
+      U.api('patient.get', { patientId: p.PatientID, recent: true }, { silent: true }).then(function (full) {
+        if (st.patient !== p) return;                               // đã đổi BN khác trong lúc chờ
         if (full.Tier) st.patient.Tier = full.Tier;
+        var rc = full.recent || {};
         st.priorDates = full.orders.filter(function (o) { return o.Status !== 'CANCELLED'; }).map(function (o) { return o.OrderDate; });
+        if (rc.firstVisit) st.priorDates.push(rc.firstVisit);       // khám từ năm cũ vẫn tính tái khám (máy chủ kiểm tra lại khi lưu)
         recalc();   // tái khám → chiết khấu tự động
-        var last = full.orders.slice(0, 5);
-        U.$('#pt-last', ptBox).innerHTML = last.length ? '<div class="small text-muted mb-1">Lần khám gần đây</div><div class="list-group list-group-flush small">' +
+        var last = full.orders.slice(0, 5), fromY = String(rc.from || '').substring(0, 4);
+        var older = '';
+        if (rc.olderCount > 0) {
+          var y = String(rc.lastOlder).substring(0, 4);
+          older = '<a href="#" class="small d-inline-block mt-2" id="pt-older" data-y="' + y + '"><i class="bi bi-search"></i> ' + rc.olderCount + ' lần khám trước năm ' + fromY + ' – xem ở Tra cứu phiếu</a>';
+        } else if (rc.olderCount === null && rc.from) {
+          older = '<div class="small text-muted mt-2">Lần khám trước năm ' + fromY + ': xem ở Tra cứu phiếu.</div>';
+        }
+        U.$('#pt-last', ptBox).innerHTML = (last.length ? '<div class="small text-muted mb-1">Lần khám gần đây' + (fromY ? ' (từ ' + fromY + ')' : '') + '</div><div class="list-group list-group-flush small">' +
           last.map(function (o) { return '<a class="list-group-item list-group-item-action px-0 d-flex justify-content-between" href="#/order/' + o.OrderID + '"><span>' + U.vnDate(o.OrderDate) + ' · ' + U.chips(o.PanelCodes) + '</span>' + U.badge(o.Status) + '</a>'; }).join('') + '</div>'
-          : '<div class="small text-muted">Bệnh nhân mới – chưa có lịch sử khám.</div>';
-      }).catch(function () {});
+          : '<div class="small text-muted">' + (rc.olderCount > 0 ? 'Không có lần khám từ năm ' + fromY + '.' : (rc.olderCount === null ? 'Không có lần khám từ năm ' + fromY + '.' : 'Bệnh nhân mới – chưa có lịch sử khám.')) + '</div>') + older;
+        var ol = U.$('#pt-older', ptBox);
+        if (ol) ol.onclick = function (e) {
+          e.preventDefault();
+          var yy = ol.getAttribute('data-y');
+          // Mở tab mới (giữ nguyên phiếu đang nhập), điền sẵn: mã BN + năm của lần khám cũ gần nhất
+          try { localStorage.setItem('lis_search_prefill', JSON.stringify({ q: p.PatientID, from: yy + '-01-01', to: yy + '-12-31', status: '', panelCode: '', doctor: '' })); } catch (x) { /* ignore */ }
+          window.open(location.pathname + location.search + '#/order-search', '_blank');
+        };
+      }).catch(function () { U.$('#pt-last', ptBox).innerHTML = ''; });
       refreshResults();
     }
     function renderPatientForm(p, dupMatches) {
@@ -451,7 +471,11 @@
 
   /* ================================================================ VIEW: ORDER SEARCH */
   App.views['order-search'] = function (view) {
-    var saved = App._searchState || { q: '', from: U.addDays(U.today(), -30), to: U.today(), status: '', panelCode: '', doctor: '' };
+    try {
+      var pre = localStorage.getItem('lis_search_prefill');
+      if (pre) { localStorage.removeItem('lis_search_prefill'); App._searchState = JSON.parse(pre); }
+    } catch (x) { /* ignore */ }
+    var saved = App._searchState || { q: '', from: U.addDays(U.today(), -(App.rangeSetting('SEARCH_DEFAULT_DAYS') || 30)), to: U.today(), status: '', panelCode: '', doctor: '' };
     view.innerHTML =
       '<div class="card mb-3"><div class="card-body"><form id="s-form" class="row g-2 align-items-end">' +
         '<div class="col-lg-4"><label class="form-label">Từ khóa</label><input class="form-control" name="q" value="' + esc(saved.q) + '" placeholder="Mã phiếu XN-…, mã BN, họ tên, SĐT"></div>' +
@@ -464,11 +488,15 @@
         '<div class="col-12 d-flex gap-2"><button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> Tìm kiếm</button>' +
           '<button class="btn btn-light" type="button" data-range="0">Hôm nay</button><button class="btn btn-light" type="button" data-range="7">7 ngày</button><button class="btn btn-light" type="button" data-range="30">30 ngày</button>' +
           (App.can('order.create') ? '<a class="btn btn-outline-primary ms-auto" href="#/order-new"><i class="bi bi-plus-lg"></i> Phiếu mới</a>' : '') + '</div>' +
+        '<div class="col-12 small scope-hint" id="s-scope"></div>' +
       '</form></div></div><div class="card"><div id="s-result">' + U.empty('Nhập điều kiện và bấm Tìm kiếm', 'bi-search') + '</div></div>';
 
     var form = U.$('#s-form', view);
+    var scopeOk = App.bindScope(form.from, form.to, U.$('#s-scope', view), 'SEARCH_MAX_DAYS');
     function run() {
       var d = U.formData(form);
+      // Mã phiếu đầy đủ → tìm thẳng, bỏ qua khoảng ngày; còn lại phải nằm trong giới hạn ngày
+      if (!/^XN-\d{6}-\d+$/i.test(String(d.q || '').trim()) && !scopeOk()) { U.toast('Khoảng ngày vượt giới hạn – thu hẹp lại để tra cứu nhanh hơn', 'warn'); return; }
       App._searchState = d;
       U.$('#s-result', view).innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
       Promise.all([U.api('order.search', d), App.Users.load().catch(function () { return []; })]).then(function (res) {
@@ -490,7 +518,7 @@
     form.onsubmit = function (e) { e.preventDefault(); run(); };
     U.on(view, 'click', '[data-range]', function (e, el) {
       var n = Number(el.getAttribute('data-range'));
-      form.to.value = U.today(); form.from.value = U.addDays(U.today(), -n); run();
+      form.to.value = U.today(); form.from.value = U.addDays(U.today(), -n); scopeOk(); run();
     });
     U.on(view, 'click', 'tr[data-id]', function (e, el) { App.go('order/' + el.getAttribute('data-id')); });
     // Tải sẵn phiếu khi rê chuột / chạm vào dòng (mở phiếu gần như tức thì)
@@ -952,13 +980,41 @@
 
   /* ================================================================ HISTORY COMPONENT */
   App.renderHistory = function (box, patientId, highlightOrder) {
-    box.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
-    U.api('history.byPatient', { patientId: patientId }).then(function (h) {
-      if (!h.tests.length) { box.innerHTML = U.empty('Chưa có dữ liệu kết quả để so sánh', 'bi-graph-up'); return; }
+    // Khoảng thời gian: Toàn bộ | 1 / 3 / 5 năm | Tùy chọn – càng hẹp càng ít DB năm phải đọc (mặc định: Cấu hình chung → HISTORY_DEFAULT_YEARS)
+    var st = box._histState || { years: App.rangeSetting('HISTORY_DEFAULT_YEARS') || 0, from: '', to: '' };
+    box._histState = st;
+    var opts = [[0, 'Toàn bộ'], [1, '1 năm'], [3, '3 năm'], [5, '5 năm'], [-1, 'Tùy chọn']];
+    function range() {
+      if (st.years > 0) return { from: U.addDays(U.today(), -Math.round(st.years * 365.25)), to: '' };
+      if (st.years === -1) return { from: st.from, to: st.to };
+      return { from: '', to: '' };
+    }
+    box.innerHTML = '<div class="d-flex flex-wrap align-items-center gap-2 mb-2 hist-range">' +
+        '<div class="btn-group btn-group-sm" role="group">' + opts.map(function (o) {
+          return '<button type="button" class="btn ' + (st.years === o[0] ? 'btn-primary' : 'btn-outline-secondary') + '" data-hy="' + o[0] + '">' + o[1] + '</button>';
+        }).join('') + '</div>' +
+        (st.years === -1 ? '<input type="date" class="form-control form-control-sm" id="hy-from" style="width:145px" value="' + esc(st.from) + '">' +
+          '<span class="text-muted">→</span><input type="date" class="form-control form-control-sm" id="hy-to" style="width:145px" value="' + esc(st.to) + '">' +
+          '<button class="btn btn-sm btn-light" id="hy-go"><i class="bi bi-arrow-repeat"></i></button>' : '') +
+        '<span class="small text-muted ms-auto" id="hy-scope"></span></div><div id="hy-body"><div class="empty"><div class="spinner-border text-secondary"></div></div></div>';
+    var body = U.$('#hy-body', box);
+    box.onclick = function (e) {
+      var b = e.target.closest('[data-hy]');
+      if (b) { st.years = Number(b.getAttribute('data-hy')); if (st.years === -1 && !st.from) { st.from = U.addDays(U.today(), -365); st.to = U.today(); } App.renderHistory(box, patientId, highlightOrder); return; }
+      if (e.target.closest('#hy-go')) { st.from = U.$('#hy-from', box).value; st.to = U.$('#hy-to', box).value; App.renderHistory(box, patientId, highlightOrder); return; }
+      var tr = e.target.closest('tr[data-test]');
+      if (tr && box._hist) App.historyChart(box._hist.tests.filter(function (x) { return x.TestCode === tr.getAttribute('data-test'); })[0]);
+    };
+    var r = range();
+    if (r.from && r.to && r.from > r.to) { body.innerHTML = U.empty('Từ ngày phải trước Đến ngày', 'bi-exclamation-circle'); return; }
+    U.api('history.byPatient', { patientId: patientId, from: r.from, to: r.to }).then(function (h) {
+      box._hist = h;
+      var sc = h.scope;
+      if (sc) U.$('#hy-scope', box).innerHTML = '<i class="bi bi-database"></i> ' + (sc.dbs ? 'Đọc ' + sc.dbs + '/' + sc.totalDbs + ' DB' : 'Không cần đọc DB') +
+        (sc.dbs && sc.cached === sc.dbs ? ' · bộ nhớ đệm' : '');
+      if (!h.tests.length) { body.innerHTML = U.empty(r.from || r.to ? 'Không có kết quả trong khoảng thời gian này' : 'Chưa có dữ liệu kết quả để so sánh', 'bi-graph-up'); return; }
       var visits = h.visits.slice(-10);
-      var vIdx = {};
-      visits.forEach(function (v) { vIdx[v.OrderID] = true; });
-      box.innerHTML = '<div class="d-flex align-items-center mb-2"><div class="small text-muted">' + h.visits.length + ' lần có kết quả · hiển thị ' + visits.length + ' lần gần nhất. Bấm vào chỉ số để xem biểu đồ.</div></div>' +
+      body.innerHTML = '<div class="small text-muted mb-2">' + h.visits.length + ' lần có kết quả · hiển thị ' + visits.length + ' lần gần nhất. Bấm vào chỉ số để xem biểu đồ.</div>' +
         '<div class="table-wrap"><table class="table table-sm table-hover hist-table"><thead><tr><th>Chỉ số</th><th>Đơn vị</th>' +
         visits.map(function (v) { return '<th class="vcol' + (v.OrderID === highlightOrder ? ' text-primary' : '') + '">' + U.vnDate(v.OrderDate) + '</th>'; }).join('') + '<th>Xu hướng</th></tr></thead><tbody>' +
         h.tests.map(function (t) {
@@ -968,11 +1024,7 @@
             visits.map(function (v) { var p = byOrder[v.OrderID]; return '<td class="val' + (p ? ' flag-' + (p.Flag || '') : '') + '">' + (p ? esc(p.Value) : '<span class="text-muted">·</span>') + '</td>'; }).join('') +
             '<td class="trend-' + t.trend + '">' + ({ UP: '<i class="bi bi-arrow-up-right"></i> Tăng', DOWN: '<i class="bi bi-arrow-down-right"></i> Giảm', FLAT: '<i class="bi bi-arrow-right"></i> Không đổi' }[t.trend] || '') + '</td></tr>';
         }).join('') + '</tbody></table></div>';
-      U.on(box, 'click', 'tr[data-test]', function (e, el) {
-        var t = h.tests.filter(function (x) { return x.TestCode === el.getAttribute('data-test'); })[0];
-        App.historyChart(t);
-      });
-    }).catch(function () { box.innerHTML = U.empty('Lỗi tải lịch sử', 'bi-exclamation-triangle'); });
+    }).catch(function () { body.innerHTML = U.empty('Lỗi tải lịch sử', 'bi-exclamation-triangle'); });
   };
 
   App.historyChart = function (t) {
