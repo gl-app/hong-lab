@@ -4,6 +4,6 @@
  *  API_URL = 'https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec' → kết nối Google Apps Script thật.
  */
 window.LIS_CONFIG = {
-  API_URL: 'DEMO',
+  API_URL: 'https://script.google.com/macros/s/AKfycbyISP9NCWVi-3w5dodGoexnX-C8bDSFX8dw_0TgOhDP15TUj6Vp52-uEu4xuYqsoEI/exec',
   REQUEST_TIMEOUT_MS: 60000
 };
