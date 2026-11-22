@@ -1,0 +1,1009 @@
+/**
+ * views-admin.js – Cảnh báo tái khám, Thống kê doanh thu + Xuất Excel, Nhật ký hệ thống, Quản trị.
+ */
+(function (App) {
+  'use strict';
+  var U = App.U, esc = U.esc;
+
+  /* ================================================================ FOLLOW-UP */
+  App.views['followup'] = function (view) {
+    var st = { from: U.addDays(U.today(), -30), to: U.addDays(U.today(), Number(App.setting('FOLLOWUP_WINDOW_DAYS', 7))), status: 'PENDING', bucket: '' };
+    view.innerHTML = '<div class="row g-3 mb-3" id="fu-kpi"></div><div class="card"><div class="card-header flex-wrap gap-2">' +
+      '<div class="d-flex gap-2 flex-wrap align-items-center"><input type="date" class="form-control form-control-sm" id="fu-from" value="' + st.from + '" style="width:150px">' +
+      '<span class="text-muted">→</span><input type="date" class="form-control form-control-sm" id="fu-to" value="' + st.to + '" style="width:150px">' +
+      '<select class="form-select form-select-sm" id="fu-status" style="width:170px"><option value="PENDING">Chờ tái khám</option><option value="DONE">Đã tái khám</option><option value="SKIPPED">Bỏ qua</option><option value="ALL">Tất cả</option></select>' +
+      '<button class="btn btn-sm btn-primary" id="fu-go"><i class="bi bi-arrow-clockwise"></i> Tải</button></div></div><div id="fu-list"></div></div>';
+
+    function load() {
+      st.from = U.$('#fu-from', view).value; st.to = U.$('#fu-to', view).value; st.status = U.$('#fu-status', view).value;
+      U.$('#fu-list', view).innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
+      U.api('followup.list', { from: st.from, to: st.to, status: st.status }).then(function (d) {
+        var k = [['OVERDUE', 'Quá hạn', 'bi-exclamation-octagon', 'var(--danger)'], ['TODAY', 'Hôm nay', 'bi-calendar-check', 'var(--warn)'], ['UPCOMING', 'Sắp đến', 'bi-calendar-event', 'var(--brand)'], ['RETURNED', 'Đã quay lại (chưa đánh dấu)', 'bi-person-check', 'var(--success)']];
+        U.$('#fu-kpi', view).innerHTML = k.map(function (x) {
+          return '<div class="col-6 col-lg-3"><div class="card kpi" role="button" data-bucket="' + x[0] + '" style="' + (st.bucket === x[0] ? 'outline:2px solid ' + x[3] : '') + '"><div class="label"><i class="bi ' + x[2] + '" style="color:' + x[3] + '"></i> ' + x[1] + '</div>' +
+            '<div class="value" style="color:' + x[3] + '">' + d.summary[x[0]] + '</div><div class="sub">bệnh nhân</div></div></div>';
+        }).join('');
+        var rows = st.bucket ? d.rows.filter(function (r) { return r.Bucket === st.bucket; }) : d.rows;
+        U.$('#fu-list', view).innerHTML = rows.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Hẹn ngày</th><th>Còn</th><th>Bệnh nhân</th><th>Điện thoại</th><th>Phiếu gốc</th><th>Nhóm XN</th><th>Đã quay lại</th><th class="text-end">Thao tác</th></tr></thead><tbody>' +
+          rows.map(function (r) {
+            return '<tr><td>' + U.vnDate(r.FollowUpDate) + ' ' + U.badge(r.Bucket) + '</td><td class="tabular">' + (r.Bucket === 'RETURNED' ? '<span class="text-muted">' + U.vnDate(r.RevisitDate) + '</span>' : r.DaysLeft < 0 ? '<span class="text-danger">' + (-r.DaysLeft) + ' ngày trước</span>' : (r.DaysLeft === 0 ? 'Hôm nay' : r.DaysLeft + ' ngày')) + '</td>' +
+              '<td><a href="#/patient/' + esc(r.PatientID) + '" class="fw-medium text-decoration-none">' + esc(r.PatientName) + '</a><div class="small text-muted">' + esc([r.Gender, r.Age !== null ? r.Age + 't' : ''].filter(String).join(' · ')) + '</div></td>' +
+              '<td>' + (r.Phone ? '<a href="tel:' + esc(r.Phone) + '"><i class="bi bi-telephone"></i> ' + esc(r.Phone) + '</a>' : '—') + '</td>' +
+              '<td><a class="mono small" href="#/order/' + r.OrderID + '">' + r.OrderID + '</a><div class="small text-muted">' + U.vnDate(r.OrderDate) + '</div></td><td>' + U.chips(r.PanelCodes) + '</td>' +
+              '<td>' + (r.RevisitDate ? '<span class="text-success small"><i class="bi bi-check2"></i> ' + U.vnDate(r.RevisitDate) + '</span>' : '<span class="text-muted small">Chưa</span>') + '</td>' +
+              '<td class="text-end text-nowrap">' + (App.can('order.create') ? '<a class="btn btn-sm btn-outline-primary" href="#/order-new/' + encodeURIComponent(r.PatientID) + '" title="Tạo phiếu tái khám"><i class="bi bi-plus-lg"></i></a> ' : '') +
+                (r.FollowUpStatus === 'PENDING' ? '<button class="btn btn-sm btn-outline-success" data-fu="DONE" data-id="' + r.OrderID + '" title="Đánh dấu đã tái khám"><i class="bi bi-check2-circle"></i></button> ' +
+                '<button class="btn btn-sm btn-outline-secondary" data-fu="SKIPPED" data-id="' + r.OrderID + '" title="Bỏ qua"><i class="bi bi-slash-circle"></i></button>' : U.badge(r.FollowUpStatus) +
+                ' <button class="btn btn-sm btn-link" data-fu="PENDING" data-id="' + r.OrderID + '">Hoàn tác</button>') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : U.empty('Không có lịch hẹn tái khám trong khoảng này', 'bi-calendar2-check');
+      }).catch(function () {});
+    }
+    U.$('#fu-go', view).onclick = function () { st.bucket = ''; load(); };
+    U.on(view, 'click', '[data-bucket]', function (e, el) { var b = el.getAttribute('data-bucket'); st.bucket = st.bucket === b ? '' : b; load(); });
+    U.on(view, 'click', '[data-fu]', function (e, el) {
+      var status = el.getAttribute('data-fu');
+      var go = function (note) {
+        U.api('followup.update', { orderId: el.getAttribute('data-id'), status: status, note: note || '' }).then(function () { U.toast('Đã cập nhật'); load(); App.refreshFollowupBadge(); }).catch(function () {});
+      };
+      if (status === 'SKIPPED') U.prompt('Bỏ qua lịch tái khám', 'Lý do (tuỳ chọn)', false).then(function (n) { if (n !== null) go(n); });
+      else go();
+    });
+    load();
+  };
+
+  /* ================================================================ MY WORK */
+  App.views['my-work'] = function (view) {
+    var t = U.today();
+    var st = App._workState || { status: 'PENDING', from: U.addDays(t, -90), to: t, username: App.state.user.username };
+    var isAdmin = App.can('*');
+    var canExport = App.can('work.export|*');
+    view.innerHTML = '<div class="card mb-3"><div class="card-body d-flex flex-wrap gap-2 align-items-end">' +
+      '<div class="btn-group" role="group" id="w-tabs">' +
+        [['PENDING', 'Chờ kết quả'], ['DONE', 'Hoàn tất'], ['ALL', 'Tất cả']].map(function (x) {
+          return '<button class="btn btn-outline-primary' + (st.status === x[0] ? ' active' : '') + '" data-ws="' + x[0] + '">' + x[1] + ' <span class="badge text-bg-light ms-1" data-wc="' + x[0] + '"></span></button>';
+        }).join('') + '</div>' +
+      '<div><label class="form-label">Từ ngày</label><input type="date" class="form-control" id="w-from" value="' + st.from + '"></div>' +
+      '<div><label class="form-label">Đến ngày</label><input type="date" class="form-control" id="w-to" value="' + st.to + '"></div>' +
+      (isAdmin ? '<div style="min-width:220px"><label class="form-label">Nhân viên</label><select class="form-select" id="w-user"><option value="' + esc(App.state.user.username) + '">Tôi</option>' +
+        '<option value="">Tất cả phiếu đã phân công</option><option value="*">Tất cả phiếu (kể cả chưa phân công)</option></select></div>' : '') +
+      '<button class="btn btn-primary" id="w-go"><i class="bi bi-arrow-clockwise"></i> Tải</button>' +
+      (canExport ? '<div class="ms-auto d-flex gap-2 align-items-center"><div class="form-check mb-0"><input class="form-check-input" type="checkbox" id="w-incres"><label class="form-check-label small" for="w-incres">Kèm kết quả chi tiết</label></div>' +
+        '<button class="btn btn-outline-primary" id="w-export"><i class="bi bi-file-earmark-excel"></i> Xuất Excel</button></div>' : '') +
+      '</div></div><div id="w-sum" class="mb-3"></div><div class="card" id="w-list"></div>';
+    var wChart = null;
+    App._cleanup = function () { if (wChart) wChart.destroy(); };
+    if (isAdmin) App.Users.load().then(function (users) {
+      var sel = U.$('#w-user', view);
+      if (!sel) return;
+      sel.insertAdjacentHTML('beforeend', users.filter(function (u) { return u.Username !== App.state.user.username; })
+        .map(function (u) { return '<option value="' + esc(u.Username) + '">' + esc(u.FullName) + ' (' + esc(u.RoleName) + ')</option>'; }).join(''));
+      sel.value = st.username;
+    }).catch(function () {});
+
+    function params() {
+      st.from = U.$('#w-from', view).value; st.to = U.$('#w-to', view).value;
+      if (isAdmin) st.username = U.$('#w-user', view).value;
+      App._workState = st;
+      var p = { status: st.status, from: st.from, to: st.to };
+      if (isAdmin) p.username = st.username;
+      return p;
+    }
+    /** Thống kê nhanh công việc – không có số tiền. */
+    function loadSummary(p) {
+      var box = U.$('#w-sum', view);
+      var q = { from: p.from, to: p.to };
+      if (isAdmin) q.username = p.username;
+      U.api('work.summary', q, { silent: true }).then(function (d) {
+        var s = d.summary;
+        var k = [
+          ['Tổng phiếu', U.num(s.total), U.vnDate(d.from) + ' → ' + U.vnDate(d.to), 'var(--brand)'],
+          ['Hoàn tất', U.num(s.completed), 'Tỷ lệ ' + s.completionRate + '%', 'var(--success)'],
+          ['Đang chờ KQ', U.num(s.pending), s.pendingOver24h ? s.pendingOver24h + ' phiếu chờ > 24 giờ' : 'Không có phiếu chờ > 24 giờ', s.pendingOver24h ? 'var(--danger)' : 'var(--warn)'],
+          ['Hôm nay', s.todayCompleted + ' / ' + s.today, 'hoàn tất / tổng', 'var(--brand)'],
+          ['Thời gian trả KQ', s.avgTatHours === null ? '—' : s.avgTatHours + ' giờ', s.medianTatHours === null ? 'trung bình' : 'trung vị ' + s.medianTatHours + ' giờ', 'var(--brand)']
+        ];
+        box.innerHTML = '<div class="row g-3">' + k.map(function (x) {
+          return '<div class="col-6 col-lg"><div class="card kpi h-100"><div class="label">' + x[0] + '</div><div class="value" style="color:' + x[3] + '">' + x[1] + '</div><div class="sub">' + esc(x[2]) + '</div></div></div>';
+        }).join('') + '</div>' +
+          (s.total ? '<div class="row g-3 mt-0"><div class="col-xl-8"><div class="card h-100"><div class="card-header">Phiếu theo ngày</div><div class="card-body"><canvas id="w-chart" height="90"></canvas></div></div></div>' +
+          '<div class="col-xl-4"><div class="card h-100"><div class="card-header">Theo nhóm xét nghiệm</div><div class="card-body">' +
+            d.byPanel.map(function (x) {
+              var pct = Math.round(x.count * 100 / s.total);
+              return '<div class="d-flex align-items-center gap-2 mb-2"><span class="panel-chip" style="width:34px;text-align:center">' + x.panelCode + '</span><span class="small flex-grow-1 text-truncate">' + esc(x.panelName) + '</span>' +
+                '<div class="progress" style="width:90px;height:6px"><div class="progress-bar" style="width:' + pct + '%;background:var(--brand)"></div></div><span class="small tabular" style="width:28px;text-align:right">' + x.count + '</span></div>';
+            }).join('') + '</div></div></div></div>' : '');
+        if (wChart) { wChart.destroy(); wChart = null; }
+        if (window.Chart && s.total && U.$('#w-chart', box)) {
+          wChart = new Chart(U.$('#w-chart', box), {
+            type: 'bar',
+            data: { labels: d.byDay.map(function (x) { return U.vnDate(x.date).substring(0, 5); }),
+              datasets: [{ label: 'Hoàn tất', data: d.byDay.map(function (x) { return x.completed; }), backgroundColor: '#0f4c5c', borderRadius: 3 },
+                         { label: 'Chờ KQ', data: d.byDay.map(function (x) { return x.total - x.completed; }), backgroundColor: '#e36414', borderRadius: 3 }] },
+            options: { plugins: { legend: { position: 'bottom' } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { precision: 0 } } } }
+          });
+        }
+      }).catch(function () { box.innerHTML = ''; });
+    }
+    function load() {
+      var box = U.$('#w-list', view);
+      box.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
+      var prm = params();
+      loadSummary(prm);
+      Promise.all([U.api('work.list', prm), App.Users.load().catch(function () { return []; })]).then(function (res) {
+        var d = res[0];
+        U.$('[data-wc="PENDING"]', view).textContent = d.counts.PENDING;
+        U.$('[data-wc="DONE"]', view).textContent = d.counts.DONE;
+        U.$('[data-wc="ALL"]', view).textContent = d.counts.PENDING + d.counts.DONE;
+        box.innerHTML = d.rows.length ? '<div class="table-wrap"><table class="table table-hover"><thead><tr><th>Mã phiếu</th><th>Ngày</th><th>Bệnh nhân</th><th>Nhóm XN</th><th>Phụ trách</th><th>Trạng thái</th><th class="text-end">Trả KQ</th></tr></thead><tbody>' +
+          d.rows.map(function (o) {
+            return '<tr data-id="' + o.OrderID + '"><td class="mono fw-semibold">' + o.OrderID + '</td><td>' + U.vnDate(o.OrderDate) + '</td>' +
+              '<td><div class="fw-medium">' + esc(o.PatientName) + '</div><div class="small text-muted">' + esc([o.Gender, o.Age !== null ? o.Age + 't' : '', o.Phone].filter(String).join(' · ')) + '</div></td>' +
+              '<td>' + U.chips(o.PanelCodes) + '</td><td class="small">' + esc(App.Users.names(o.AssignedTo) || '—') + '</td><td>' + U.badge(o.Status) + '</td>' +
+              '<td class="text-end small tabular">' + (o.CompletedAt ? U.vnDateTime(o.CompletedAt) + '<div class="text-muted">' + (o.TatHours !== null ? o.TatHours + ' giờ' : '') + '</div>' : '—') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : U.empty(st.status === 'PENDING' ? 'Không có phiếu chờ kết quả' : 'Không có phiếu', 'bi-check2-all');
+      }).catch(function () { box.innerHTML = U.empty('Lỗi tải dữ liệu', 'bi-exclamation-triangle'); });
+    }
+    U.on(view, 'click', '[data-ws]', function (e, el) {
+      st.status = el.getAttribute('data-ws');
+      U.$$('[data-ws]', view).forEach(function (b) { b.classList.toggle('active', b === el); });
+      load();
+    });
+    U.on(view, 'click', 'tr[data-id]', function (e, el) { App.go('order/' + el.getAttribute('data-id')); });
+    U.$('#w-go', view).onclick = load;
+    var ex = U.$('#w-export', view);
+    if (ex) ex.onclick = function () {
+      var p = params();
+      p.includeResults = U.$('#w-incres', view).checked;
+      ex.disabled = true;
+      U.api('work.export', p).then(App.exportWorkXlsx).catch(function () {}).finally(function () { ex.disabled = false; });
+    };
+    load();
+  };
+
+  /** Excel danh sách công việc (không có cột tiền). */
+  App.exportWorkXlsx = function (d) {
+    if (!window.XLSX) { U.toast('Thư viện Excel chưa tải xong', 'error'); return; }
+    var wb = XLSX.utils.book_new();
+    var head = [['DANH SÁCH PHIẾU XÉT NGHIỆM PHỤ TRÁCH'], ['Nhân viên', d.whoName, 'Từ ngày', U.vnDate(d.from), 'Đến ngày', U.vnDate(d.to)],
+      ['Xuất lúc', new Date().toLocaleString('vi-VN'), 'Người xuất', App.state.user.username], []];
+    var cols = ['Mã phiếu', 'Ngày khám', 'Mã BN', 'Họ tên', 'Giới tính', 'Tuổi', 'SĐT', 'BS chỉ định', 'Nhóm XN', 'Người phụ trách', 'Trạng thái', 'Tạo phiếu lúc', 'Có KQ đầu lúc', 'Hoàn tất lúc', 'Thời gian trả KQ (giờ)'];
+    var aoa = head.concat([cols]).concat(d.rows.map(function (o) {
+      return [o.OrderID, U.vnDate(o.OrderDate), o.PatientID, o.PatientName, o.Gender, o.Age === null ? '' : o.Age, o.Phone, o.DoctorName, o.PanelCodes,
+              o.AssignedNames, U.statusLabel(o.Status), U.vnDateTime(o.CreatedAt), U.vnDateTime(o.FirstResultAt), U.vnDateTime(o.CompletedAt), o.TatHours === null ? '' : o.TatHours];
+    }));
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = cols.map(function (c, i) { return { wch: i === 3 || i === 9 ? 26 : 15 }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'PhieuPhuTrach');
+    if (d.results && d.results.length) {
+      var rh = ['Mã phiếu', 'Ngày khám', 'Mã BN', 'Mã nhóm', 'Mã chỉ số', 'Chỉ số', 'Kết quả', 'Đơn vị', 'Tham chiếu', 'Cờ'];
+      var ws2 = XLSX.utils.aoa_to_sheet([rh].concat(d.results.map(function (r) {
+        return [r.OrderID, U.vnDate(r.OrderDate), r.PatientID, r.PanelCode, r.TestCode, r.TestName, r.Value, r.Unit, r.RefText, r.Flag];
+      })));
+      ws2['!cols'] = rh.map(function (h, i) { return { wch: i === 5 || i === 8 ? 26 : 14 }; });
+      XLSX.utils.book_append_sheet(wb, ws2, 'KetQua');
+    }
+    XLSX.writeFile(wb, 'LIS_PhuTrach_' + (d.who || 'all').replace(/\*/g, 'all') + '_' + d.from + '_' + d.to + '.xlsx');
+    U.toast('Đã xuất ' + d.rows.length + ' phiếu');
+  };
+
+  /* ================================================================ REPORT */
+  App.views['report'] = function (view) {
+    var t = U.today();
+    var st = App._reportState || { from: t.substring(0, 8) + '01', to: t };
+    var charts = [];
+    App._cleanup = function () { charts.forEach(function (c) { c.destroy(); }); };
+    var presets = [['Hôm nay', t, t], ['7 ngày', U.addDays(t, -6), t], ['Tháng này', t.substring(0, 8) + '01', t],
+      ['Tháng trước', prevMonth(t)[0], prevMonth(t)[1]], ['Năm nay', t.substring(0, 4) + '-01-01', t]];
+    view.innerHTML = '<div class="card mb-3"><div class="card-body d-flex flex-wrap gap-2 align-items-end">' +
+      '<div><label class="form-label">Từ ngày</label><input type="date" class="form-control" id="r-from" value="' + st.from + '"></div>' +
+      '<div><label class="form-label">Đến ngày</label><input type="date" class="form-control" id="r-to" value="' + st.to + '"></div>' +
+      '<button class="btn btn-primary" id="r-go"><i class="bi bi-bar-chart"></i> Xem</button>' +
+      presets.map(function (p, i) { return '<button class="btn btn-light" data-preset="' + i + '">' + p[0] + '</button>'; }).join('') +
+      (App.can('report.export') ? '<div class="ms-auto d-flex gap-2 align-items-center"><div class="form-check mb-0"><input class="form-check-input" type="checkbox" id="r-incres"><label class="form-check-label small" for="r-incres">Kèm kết quả chi tiết</label></div>' +
+        '<button class="btn btn-outline-primary" id="r-export"><i class="bi bi-file-earmark-excel"></i> Xuất Excel</button></div>' : '') +
+      '<div class="w-100 small scope-hint" id="r-scope"></div>' +
+      '</div></div><div id="r-body"></div>';
+
+    function prevMonth(d) {
+      var y = +d.substring(0, 4), m = +d.substring(5, 7) - 1;
+      if (m === 0) { m = 12; y--; }
+      var mm = ('0' + m).slice(-2);
+      var last = new Date(y, m, 0).getDate();
+      return [y + '-' + mm + '-01', y + '-' + mm + '-' + last];
+    }
+    var scopeOk = App.bindScope(U.$('#r-from', view), U.$('#r-to', view), U.$('#r-scope', view), 'REPORT_MAX_DAYS');
+    function load() {
+      st.from = U.$('#r-from', view).value; st.to = U.$('#r-to', view).value;
+      if (!scopeOk()) { U.toast('Khoảng ngày vượt giới hạn thống kê – thu hẹp lại', 'warn'); return; }
+      App._reportState = st;
+      var body = U.$('#r-body', view);
+      body.innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
+      U.api('report.revenue', st).then(function (r) {
+        charts.forEach(function (c) { c.destroy(); }); charts = [];
+        var s = r.summary;
+        var kpi = [['Doanh thu thuần', U.money(s.net), 'Sau chiết khấu'], ['Số phiếu', U.num(s.orders), s.cancelled ? s.cancelled + ' phiếu hủy (không tính)' : 'không gồm phiếu hủy'],
+          ['Bệnh nhân', U.num(s.patients), U.num(s.panels) + ' lượt nhóm XN'], ['Đã thu', U.money(s.paid), 'Chưa thu: ' + U.money(s.unpaid)],
+          ['Chiết khấu', U.money(s.discount), 'Tổng trước CK: ' + U.money(s.gross)], ['TB / phiếu', U.money(s.orders ? Math.round(s.net / s.orders) : 0), '']];
+        body.innerHTML = '<div class="row g-3 mb-3">' + kpi.map(function (k) {
+          return '<div class="col-6 col-lg-4 col-xxl-2"><div class="card kpi h-100"><div class="label">' + k[0] + '</div><div class="value">' + k[1] + '</div><div class="sub">' + esc(k[2]) + '</div></div></div>';
+        }).join('') + '</div>' +
+          '<div class="row g-3"><div class="col-xl-8"><div class="card"><div class="card-header">Doanh thu theo ngày</div><div class="card-body"><canvas id="r-c1" height="110"></canvas></div></div></div>' +
+          '<div class="col-xl-4"><div class="card h-100"><div class="card-header">Theo bác sĩ chỉ định</div><div class="table-wrap"><table class="table table-sm"><thead><tr><th>Bác sĩ</th><th class="text-end">Phiếu</th><th class="text-end">Doanh thu</th></tr></thead><tbody>' +
+            (r.byDoctor.length ? r.byDoctor.map(function (d) { return '<tr><td>' + esc(d.doctor) + '</td><td class="text-end tabular">' + d.orders + '</td><td class="text-end tabular">' + U.money(d.net) + '</td></tr>'; }).join('') : '<tr><td colspan="3">' + U.empty('Không có dữ liệu') + '</td></tr>') +
+          '</tbody></table></div></div></div>' +
+          '<div class="col-12"><div class="card"><div class="card-header">Theo nhóm xét nghiệm <span class="small text-muted fw-normal ms-2">(đơn giá trước chiết khấu)</span></div><div class="table-wrap"><table class="table table-sm"><thead><tr><th>Mã</th><th>Nhóm XN</th><th class="text-end">Số lượt</th><th class="text-end">Doanh thu</th><th style="width:35%">Tỷ trọng</th></tr></thead><tbody>' +
+            (function () {
+              var tot = r.byPanel.reduce(function (a, b) { return a + b.amount; }, 0) || 1;
+              return r.byPanel.length ? r.byPanel.map(function (p) {
+                var pct = Math.round(p.amount * 1000 / tot) / 10;
+                return '<tr><td><span class="panel-chip">' + p.panelCode + '</span></td><td>' + esc(p.panelName) + '</td><td class="text-end tabular">' + p.count + '</td><td class="text-end tabular">' + U.money(p.amount) + '</td>' +
+                  '<td><div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" style="width:' + pct + '%;background:var(--brand)"></div></div><span class="small tabular" style="width:44px">' + pct + '%</span></div></td></tr>';
+              }).join('') : '<tr><td colspan="5">' + U.empty('Không có dữ liệu') + '</td></tr>';
+            })() + '</tbody></table></div></div></div></div>';
+        if (App.can('report.revenue|*')) {
+          body.insertAdjacentHTML('beforeend', '<div class="card mt-3"><div class="card-header">Năng suất theo nhân viên phụ trách <span class="small text-muted fw-normal ms-2">(thời gian trả KQ = tạo phiếu → hoàn tất)</span></div><div id="r-prod">' +
+            '<div class="empty"><div class="spinner-border text-secondary"></div></div></div></div>');
+          U.api('report.productivity', st, { silent: true }).then(function (pr) {
+            var box = U.$('#r-prod', body);
+            if (!box) return;
+            box.innerHTML = pr.rows.length ? '<div class="table-wrap"><table class="table table-sm"><thead><tr><th>Nhân viên</th><th class="text-end">Được giao</th><th class="text-end">Hoàn tất</th><th class="text-end">Đang chờ</th><th class="text-end">TB trả KQ</th><th class="text-end">Trung vị</th></tr></thead><tbody>' +
+              pr.rows.map(function (x) {
+                return '<tr><td>' + esc(x.fullName) + ' <span class="small text-muted mono">' + esc(x.username) + '</span></td><td class="text-end tabular">' + x.assigned + '</td><td class="text-end tabular">' + x.completed + '</td>' +
+                  '<td class="text-end tabular">' + x.pending + '</td><td class="text-end tabular">' + (x.avgTatHours === null ? '—' : x.avgTatHours + ' giờ') + '</td><td class="text-end tabular">' + (x.medianTatHours === null ? '—' : x.medianTatHours + ' giờ') + '</td></tr>';
+              }).join('') + '</tbody></table></div><div class="small text-muted px-3 py-2">' + pr.unassigned + ' phiếu chưa phân công trong kỳ.</div>'
+              : U.empty('Chưa có phiếu được phân công trong kỳ (' + pr.unassigned + ' phiếu chưa phân công)', 'bi-people');
+          }).catch(function () {});
+        }
+        if (window.Chart && r.byDay.length) {
+          charts.push(new Chart(U.$('#r-c1', body), {
+            data: { labels: r.byDay.map(function (d) { return U.vnDate(d.date).substring(0, 5); }),
+              datasets: [{ type: 'bar', label: 'Doanh thu (đ)', data: r.byDay.map(function (d) { return d.net; }), backgroundColor: '#0f4c5c', borderRadius: 3, yAxisID: 'y' },
+                { type: 'line', label: 'Số phiếu', data: r.byDay.map(function (d) { return d.orders; }), borderColor: '#e36414', backgroundColor: '#e36414', yAxisID: 'y1', cubicInterpolationMode: 'monotone', pointRadius: 2 }] },
+            options: { interaction: { mode: 'index', intersect: false }, plugins: { legend: { position: 'bottom' },
+                tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + (c.datasetIndex === 0 ? U.money(c.parsed.y) : c.parsed.y); } } } },
+              scales: { y: { ticks: { callback: function (v) { return v >= 1e6 ? (v / 1e6) + 'tr' : (v >= 1e3 ? (v / 1e3) + 'k' : v); } } },
+                y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { precision: 0 } } } }
+          }));
+        }
+      }).catch(function () { body.innerHTML = U.empty('Lỗi tải báo cáo', 'bi-exclamation-triangle'); });
+    }
+    U.$('#r-go', view).onclick = load;
+    U.on(view, 'click', '[data-preset]', function (e, el) { var p = presets[+el.getAttribute('data-preset')]; U.$('#r-from', view).value = p[1]; U.$('#r-to', view).value = p[2]; scopeOk(); load(); });
+    var ex = U.$('#r-export', view);
+    if (ex) ex.onclick = function () {
+      if (!scopeOk()) { U.toast('Khoảng ngày vượt giới hạn – thu hẹp lại trước khi xuất', 'warn'); return; }
+      ex.disabled = true;
+      U.api('report.export', { from: U.$('#r-from', view).value, to: U.$('#r-to', view).value, includeResults: U.$('#r-incres', view).checked })
+        .then(function (d) { return App.Users.load().catch(function () { return []; }).then(function () { App.exportXlsx(d); }); }).catch(function () {}).finally(function () { ex.disabled = false; });
+    };
+    load();
+  };
+
+  /** Build .xlsx with SheetJS: Tổng hợp, Phiếu XN, Chi tiết nhóm, Kết quả (tuỳ chọn). */
+  App.exportXlsx = function (d) {
+    if (!window.XLSX) { U.toast('Thư viện Excel chưa tải xong', 'error'); return; }
+    var wb = XLSX.utils.book_new();
+    var money = d.includesMoney;
+    var active = d.orders.filter(function (o) { return o.Status !== 'CANCELLED'; });
+    var sum = function (arr, k) { return arr.reduce(function (a, o) { return a + (Number(o[k]) || 0); }, 0); };
+    var summary = [['BÁO CÁO TỔNG HỢP PHIẾU XÉT NGHIỆM'], ['Từ ngày', U.vnDate(d.from), 'Đến ngày', U.vnDate(d.to)], ['Xuất lúc', new Date().toLocaleString('vi-VN'), 'Người xuất', App.state.user.username], [],
+      ['Chỉ tiêu', 'Giá trị'], ['Tổng số phiếu', d.orders.length], ['Phiếu hợp lệ', active.length], ['Phiếu hủy', d.orders.length - active.length]];
+    if (money) summary.push(['Tổng tiền (trước CK)', sum(active, 'GrossAmount')], ['Chiết khấu', sum(active, 'Discount')], ['Doanh thu thuần', sum(active, 'NetAmount')],
+      ['Đã thu', sum(active.filter(function (o) { return o.PaymentStatus === 'PAID'; }), 'NetAmount')]);
+    var ws0 = XLSX.utils.aoa_to_sheet(summary);
+    ws0['!cols'] = [{ wch: 26 }, { wch: 20 }, { wch: 12 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, ws0, 'TongHop');
+
+    var cols = [['OrderID', 'Mã phiếu'], ['OrderDate', 'Ngày khám'], ['PatientID', 'Mã BN'], ['PatientName', 'Họ tên'], ['Gender', 'Giới tính'], ['Age', 'Tuổi'], ['Phone', 'SĐT'],
+      ['Address', 'Địa chỉ'], ['DoctorName', 'BS chỉ định'], ['PanelCodes', 'Nhóm XN'], ['AssignedTo', 'Người phụ trách']];
+    if (money) cols = cols.concat([['GrossAmount', 'Tổng tiền'], ['Discount', 'Chiết khấu'], ['NetAmount', 'Thành tiền'], ['PaymentStatus', 'Thanh toán']]);
+    cols = cols.concat([['Status', 'Trạng thái'], ['FollowUpDate', 'Ngày tái khám'], ['Note', 'Ghi chú'], ['LegacyCode', 'Mã cũ'], ['CreatedBy', 'Người tạo'], ['CreatedAt', 'Thời điểm tạo']]);
+    var aoa = [cols.map(function (c) { return c[1]; })].concat(d.orders.map(function (o) {
+      return cols.map(function (c) {
+        var v = o[c[0]];
+        if (c[0] === 'Status' || c[0] === 'PaymentStatus') return U.statusLabel(v);
+        if (c[0] === 'OrderDate' || c[0] === 'FollowUpDate') return U.vnDate(v);
+        if (c[0] === 'AssignedTo') return App.Users.names(v || []);
+        return v === null || v === undefined ? '' : v;
+      });
+    }));
+    var ws1 = XLSX.utils.aoa_to_sheet(aoa);
+    ws1['!cols'] = cols.map(function (c) { return { wch: Math.max(10, c[1].length + 2, c[0] === 'PatientName' || c[0] === 'Address' ? 26 : 0) }; });
+    ws1['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: cols.length - 1 } }) };
+    XLSX.utils.book_append_sheet(wb, ws1, 'PhieuXN');
+
+    var lh = ['Mã phiếu', 'Ngày khám', 'Họ tên', 'Trạng thái phiếu', 'Mã nhóm', 'Nhóm XN'].concat(money ? ['Đơn giá'] : []).concat(['Kết quả']);
+    var la = [lh].concat(d.lines.map(function (l) {
+      return [l.OrderID, U.vnDate(l.OrderDate), l.PatientName, U.statusLabel(l.Status), l.PanelCode, l.PanelName].concat(money ? [l.Amount] : []).concat([l.ResultStatus === 'RESULTED' ? 'Có KQ' : 'Chờ KQ']);
+    }));
+    var ws2 = XLSX.utils.aoa_to_sheet(la);
+    ws2['!cols'] = lh.map(function () { return { wch: 16 }; });
+    XLSX.utils.book_append_sheet(wb, ws2, 'ChiTietNhom');
+
+    if (d.results && d.results.length) {
+      var rh = ['Mã phiếu', 'Ngày khám', 'Mã BN', 'Mã nhóm', 'Mã chỉ số', 'Chỉ số', 'Kết quả', 'Đơn vị', 'Tham chiếu', 'Cờ'];
+      var ra = [rh].concat(d.results.map(function (r) {
+        var num = Number(String(r.Value).replace(',', '.'));
+        return [r.OrderID, U.vnDate(r.OrderDate), r.PatientID, r.PanelCode, r.TestCode, r.TestName, r.Value !== '' && !isNaN(num) ? num : r.Value, r.Unit, r.RefText, r.Flag];
+      }));
+      var ws3 = XLSX.utils.aoa_to_sheet(ra);
+      ws3['!cols'] = rh.map(function (h, i) { return { wch: i === 5 || i === 8 ? 26 : 14 }; });
+      XLSX.utils.book_append_sheet(wb, ws3, 'KetQua');
+    }
+    XLSX.writeFile(wb, 'LIS_BaoCao_' + d.from + '_' + d.to + '.xlsx');
+    U.toast('Đã xuất ' + d.orders.length + ' phiếu ra Excel');
+  };
+
+  /* ================================================================ AUDIT */
+  App.views['audit'] = function (view) {
+    var t = U.today();
+    view.innerHTML = '<div class="card mb-3"><div class="card-body"><form class="row g-2 align-items-end" id="a-form">' +
+      '<div class="col-6 col-md-2"><label class="form-label">Từ ngày</label><input type="date" class="form-control" name="from" value="' + U.addDays(t, -7) + '"></div>' +
+      '<div class="col-6 col-md-2"><label class="form-label">Đến ngày</label><input type="date" class="form-control" name="to" value="' + t + '"></div>' +
+      '<div class="col-6 col-md-2"><label class="form-label">Tài khoản</label><input class="form-control" name="username"></div>' +
+      '<div class="col-6 col-md-2"><label class="form-label">Thao tác</label><select class="form-select" name="action"><option value="">Tất cả</option>' +
+        ['LOGIN', 'LOGIN_FAILED', 'ORDER_CREATE', 'ORDER_UPDATE', 'ORDER_CANCEL', 'RESULT_SAVE', 'PRINT', 'FOLLOWUP_UPDATE', 'PATIENT_CREATE', 'PATIENT_UPDATE', 'EXPORT', 'WORK_EXPORT', 'YEAR_DB_CREATE', 'WARDS_SAVE',
+         'USER_CREATE', 'USER_UPDATE', 'ROLE_UPDATE', 'SETTINGS_UPDATE', 'YEAR_DB_SAVE', 'TEST_UPDATE', 'PANEL_UPDATE', 'PRICE_UPDATE', 'DISCOUNT_CREATE', 'DISCOUNT_UPDATE', 'DISCOUNT_DELETE', 'STORAGE_OPTIMIZE'].map(function (a) { return '<option>' + a + '</option>'; }).join('') + '</select></div>' +
+      '<div class="col-md-3"><label class="form-label">Từ khóa (mã phiếu, nội dung)</label><input class="form-control" name="q"></div>' +
+      '<div class="col-md-1"><button class="btn btn-primary w-100" type="submit"><i class="bi bi-search"></i></button></div></form></div></div><div class="card" id="a-list"></div>';
+    var form = U.$('#a-form', view);
+    function load() {
+      U.$('#a-list', view).innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
+      U.api('audit.list', U.formData(form)).then(function (d) {
+        U.$('#a-list', view).innerHTML = d.rows.length ? '<div class="card-header">' + d.total + ' bản ghi' + (d.total > d.rows.length ? ' (hiển thị ' + d.rows.length + ')' : '') + '</div><div class="table-wrap"><table class="table table-sm"><thead><tr><th>Thời gian</th><th>Nguồn</th><th>Tài khoản</th><th>Thao tác</th><th>Đối tượng</th><th>Chi tiết</th></tr></thead><tbody>' +
+          d.rows.map(function (r) {
+            var link = /^XN-/.test(r.EntityID) ? '<a class="mono" href="#/order/' + esc(r.EntityID) + '">' + esc(r.EntityID) + '</a>' : (/^BN-/.test(r.EntityID) ? '<a class="mono" href="#/patient/' + esc(r.EntityID) + '">' + esc(r.EntityID) + '</a>' : esc(r.EntityID));
+            return '<tr><td class="small text-nowrap">' + U.vnDateTime(r.Timestamp) + '</td><td class="small text-muted">' + esc(r.Source) + '</td><td>' + esc(r.Username) + '</td>' +
+              '<td><span class="badge ' + (/FAIL|CANCEL/.test(r.Action) ? 'text-bg-danger' : 'text-bg-light') + '">' + esc(r.Action) + '</span></td><td class="small">' + esc(r.Entity) + ' ' + link + '</td><td>' + App.auditDetail(r.Detail) + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : U.empty('Không có bản ghi');
+      }).catch(function () {});
+    }
+    form.onsubmit = function (e) { e.preventDefault(); load(); };
+    load();
+  };
+
+  /* ================================================================ ADMIN */
+  App.views['admin'] = function (view, params) {
+    // Thứ tự thẻ: hệ thống → người dùng → danh mục nghiệp vụ → hạ tầng. '*' = chỉ Quản trị hệ thống.
+    var ALL = [
+      ['general', 'Cấu hình chung', 'bi-sliders', '*'],
+      ['users', 'Tài khoản', 'bi-people', '*'],
+      ['roles', 'Vai trò & quyền', 'bi-shield-lock', '*'],
+      ['catalog', 'Danh mục XN', 'bi-list-check', 'admin.catalog'],
+      ['pricing', 'Giá & chiết khấu', 'bi-tags', 'admin.price'],
+      ['doctors', 'Bác sĩ chỉ định', 'bi-person-badge', 'admin.doctors'],
+      ['wards', 'Phường / Xã', 'bi-geo-alt', 'admin.wards'],
+      ['years', 'Kết nối dữ liệu năm', 'bi-database', '*'],
+      ['system', 'Hệ thống', 'bi-cpu', '*']
+    ];
+    var isSys = App.can('*');
+    var tabs = ALL.filter(function (t) { return isSys || (t[3] !== '*' && App.can(t[3])); });
+    if (!tabs.length) { view.innerHTML = U.empty('Không có quyền cấu hình', 'bi-lock'); return; }
+    var tab = params[0] && tabs.some(function (t) { return t[0] === params[0]; }) ? params[0] : tabs[0][0];
+    view.innerHTML = '<ul class="nav nav-tabs mb-3">' + tabs.map(function (t) {
+      return '<li class="nav-item"><a class="nav-link' + (t[0] === tab ? ' active' : '') + '" href="#/admin/' + t[0] + '"><i class="bi ' + t[2] + '"></i> ' + t[1] + '</a></li>';
+    }).join('') + '</ul><div id="ad-body"></div>';
+    var body = U.$('#ad-body', view);
+    ({ general: general, users: users, roles: roles, catalog: catalog, pricing: pricing, doctors: doctors, wards: wards, years: years, system: system })[tab](body);
+  };
+
+  var HIDDEN_SETTINGS = ['CLINIC_LOGO_DATA', 'CLINIC_LOGO_FILE_ID', 'CLINIC_WATERMARK_FILE_ID', 'WATERMARK_ENABLED', 'WATERMARK_OPACITY', 'DB_MAX_ORDER_ROWS', 'DB_MAX_RESULT_ROWS'];   // chỉnh ở tab riêng
+
+  /** Đọc file ảnh → Image. */
+  function loadImage(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { var img = new Image(); img.onload = function () { resolve(img); }; img.onerror = reject; img.src = fr.result; };
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+  /** Vẽ lại ảnh với chiều rộng tối đa + độ trong suốt → PNG dataURL (giữ nền trong suốt). */
+  function renderPng(img, maxW, alpha) {
+    var scale = Math.min(1, maxW / img.naturalWidth);
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale)); c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    var g = c.getContext('2d');
+    g.globalAlpha = alpha === undefined ? 1 : alpha;
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  }
+
+  function general(body) {
+    U.api('admin.settings.get').then(function (rows) {
+      var st = App.state.settings || {};
+      var map = {}; rows.forEach(function (r) { map[r.Key] = r.Value; });
+      var op = Number(map.WATERMARK_OPACITY || 0.08);
+      var cur = map.CLINIC_LOGO_DATA || map.CLINIC_LOGO_URL || '';
+      body.innerHTML =
+        '<div class="card mb-3"><div class="card-header"><i class="bi bi-image"></i> Logo & watermark phiếu kết quả</div><div class="card-body"><div class="row g-4 align-items-start">' +
+          '<div class="col-lg-4"><label class="form-label">Logo hiện tại</label><div class="border rounded p-3 text-center bg-white" style="min-height:120px" id="lg-cur">' +
+            (cur ? '<img src="' + esc(cur) + '" style="max-height:100px;max-width:100%">' : '<div class="text-muted small py-4">Chưa có logo</div>') + '</div>' +
+            '<label class="form-label mt-3">Chọn file logo mới</label><input type="file" class="form-control" id="lg-file" accept="image/png,image/jpeg,image/webp">' +
+            '<div class="form-text">PNG <b>nền trong suốt</b>, rộng ≥ 500px cho bản in sắc nét.</div></div>' +
+          '<div class="col-lg-4"><label class="form-label">Watermark</label>' +
+            '<div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" id="lg-wm"' + (String(map.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? ' checked' : '') + '><label class="form-check-label" for="lg-wm">In logo mờ giữa phiếu kết quả</label></div>' +
+            '<label class="form-label">Độ đậm: <b id="lg-opv">' + Math.round(op * 100) + '%</b></label><input type="range" class="form-range" id="lg-op" min="3" max="30" value="' + Math.round(op * 100) + '">' +
+            '<div class="form-text">Khuyên dùng 6–12% để chữ và số liệu vẫn rõ khi in.</div></div>' +
+          '<div class="col-lg-4"><label class="form-label">Xem trước phiếu</label><div class="border rounded bg-white position-relative overflow-hidden" style="height:200px;padding:12px 14px">' +
+            '<img id="lg-pv-wm" src="' + esc(cur) + '" style="position:absolute;left:50%;top:55%;width:62%;transform:translate(-50%,-50%);opacity:' + op + ';' + (cur ? '' : 'display:none') + '">' +
+            '<div style="position:relative;font-size:10px;line-height:1.7;color:#334">' +
+              '<div class="d-flex gap-2 align-items-center border-bottom pb-1 mb-1"><img id="lg-pv-logo" src="' + esc(cur) + '" style="height:22px;' + (cur ? '' : 'display:none') + '"><b style="color:#0f4c5c">' + esc(st.CLINIC_NAME || 'PHÒNG XN') + '</b></div>' +
+              '<div class="text-center fw-bold" style="color:#0f4c5c">PHIẾU XÉT NGHIỆM SINH HÓA MÁU</div>' +
+              'Họ và tên: NGUYỄN VĂN A &nbsp; Tuổi: 45<br>Glucose ........ 5.6 mmol/l<br>Cholesterol ..... 4.9 mmol/l<br>Triglycerid ...... 1.8 mmol/l<br>ALT (GPT) ....... 32 U/L</div></div></div>' +
+        '</div></div><div class="card-footer bg-white d-flex gap-2 justify-content-end">' +
+          (cur ? '<button class="btn btn-outline-danger" id="lg-del"><i class="bi bi-trash"></i> Xóa logo</button>' : '') +
+          '<button class="btn btn-primary" id="lg-save"><i class="bi bi-cloud-upload"></i> Lưu logo & watermark</button></div></div>' +
+        '<div class="card"><div class="card-header">Thông tin chung</div><div class="card-body"><form id="g-form" class="row g-3">' + rows.filter(function (r) { return HIDDEN_SETTINGS.indexOf(r.Key) === -1; }).map(function (r) {
+          var long = /FOOTER|ADDRESS/.test(r.Key);
+          return '<div class="col-md-6"><label class="form-label mono">' + esc(r.Key) + '</label>' +
+            (long ? '<textarea class="form-control" rows="2" name="' + esc(r.Key) + '">' + esc(r.Value) + '</textarea>' : '<input class="form-control" name="' + esc(r.Key) + '" value="' + esc(r.Value) + '">') +
+            '<div class="form-text">' + esc(r.Description || '') + '</div></div>';
+        }).join('') + '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="g-save"><i class="bi bi-save"></i> Lưu cấu hình</button></div></div>';
+
+      var img = null;
+      var refreshBoot = function () { return Api.call('auth.me').then(function (boot) { App.state.settings = boot.settings; App.applyBranding(boot.settings); }); };
+      U.$('#lg-file', body).onchange = function (e) {
+        var f = e.target.files[0];
+        if (!f) return;
+        loadImage(f).then(function (im) {
+          img = im;
+          var prev = renderPng(im, 400);
+          ['#lg-pv-wm', '#lg-pv-logo'].forEach(function (s) { var el = U.$(s, body); el.src = prev; el.style.display = ''; });
+          if (im.naturalWidth < 300) U.toast('Ảnh hơi nhỏ (' + im.naturalWidth + 'px) – bản in có thể bị mờ', 'warn');
+        }).catch(function () { U.toast('Không đọc được file ảnh', 'error'); });
+      };
+      U.$('#lg-op', body).oninput = function () {
+        U.$('#lg-opv', body).textContent = this.value + '%';
+        U.$('#lg-pv-wm', body).style.opacity = this.value / 100;
+      };
+      U.$('#lg-wm', body).onchange = function () { U.$('#lg-pv-wm', body).style.visibility = this.checked ? 'visible' : 'hidden'; };
+      U.$('#lg-save', body).onclick = function () {
+        var opacity = Number(U.$('#lg-op', body).value) / 100, enabled = U.$('#lg-wm', body).checked;
+        var btn = this; btn.disabled = true;
+        var job;
+        if (img) {
+          var thumb = '', widths = [240, 200, 160, 120, 96];
+          for (var i = 0; i < widths.length; i++) { thumb = renderPng(img, widths[i]); if (thumb.length <= 45000) break; }
+          if (thumb.length > 45000) { U.toast('Logo quá phức tạp, hãy dùng file đơn giản hơn', 'error'); btn.disabled = false; return; }
+          job = U.api('admin.logo.upload', { logo: renderPng(img, 900), thumb: thumb, watermark: renderPng(img, 900, opacity), opacity: opacity, enabled: enabled });
+        } else {
+          // Chỉ đổi bật/tắt & độ đậm (In nhanh áp dụng ngay; PDF/Word dùng độ đậm lúc tải logo – chọn lại file để cập nhật)
+          job = U.api('admin.settings.save', { items: [{ Key: 'WATERMARK_ENABLED', Value: enabled ? 'TRUE' : 'FALSE' }, { Key: 'WATERMARK_OPACITY', Value: String(opacity) }] });
+        }
+        job.then(refreshBoot).then(function () { U.toast(img ? 'Đã lưu logo & watermark' : 'Đã lưu cài đặt watermark'); general(body); })
+          .catch(function () {}).finally(function () { btn.disabled = false; });
+      };
+      var del = U.$('#lg-del', body);
+      if (del) del.onclick = function () {
+        U.confirm('Xóa logo', 'Phiếu kết quả và màn đăng nhập sẽ không còn logo.', 'Xóa', true).then(function (ok) {
+          if (ok) U.api('admin.logo.remove').then(refreshBoot).then(function () { U.toast('Đã xóa logo'); general(body); }).catch(function () {});
+        });
+      };
+      U.$('#g-save', body).onclick = function () {
+        var d = U.formData(U.$('#g-form', body));
+        U.api('admin.settings.save', { items: Object.keys(d).map(function (k) { return { Key: k, Value: d[k] }; }) }).then(function () {
+          U.toast('Đã lưu cấu hình');
+          return refreshBoot();
+        }).catch(function () {});
+      };
+    }).catch(function () {});
+  }
+
+  function users(body) {
+    Promise.all([U.api('admin.users.list'), U.api('admin.roles.list')]).then(function (res) {
+      var list = res[0], roles = res[1].roles;
+      var roleName = function (c) { var r = roles.filter(function (x) { return x.RoleCode === c; })[0]; return r ? r.RoleName : c; };
+      body.innerHTML = '<div class="card"><div class="card-header justify-content-between"><span>' + list.length + ' tài khoản</span><button class="btn btn-sm btn-primary" id="u-new"><i class="bi bi-person-plus"></i> Thêm tài khoản</button></div>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Trạng thái</th><th>Đăng nhập gần nhất</th><th></th></tr></thead><tbody>' +
+        list.map(function (u) {
+          return '<tr><td class="mono fw-semibold">' + esc(u.Username) + '</td><td>' + esc(u.FullName) + '</td><td>' + esc(roleName(u.RoleCode)) + ' <span class="small text-muted mono">' + esc(u.RoleCode) + '</span></td>' +
+            '<td>' + (u.IsActive ? '<span class="st st-COMPLETED">Hoạt động</span>' : '<span class="st st-CANCELLED">Khóa</span>') + (u.MustChangePassword ? ' <span class="small text-warning">chờ đổi MK</span>' : '') + '</td>' +
+            '<td class="small">' + U.vnDateTime(u.LastLoginAt) + '</td><td class="text-end"><button class="btn btn-sm btn-light" data-edit="' + esc(u.Username) + '"><i class="bi bi-pencil"></i></button> ' +
+            '<button class="btn btn-sm btn-light" data-reset="' + esc(u.Username) + '" title="Đặt lại mật khẩu"><i class="bi bi-key"></i></button></td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+      function edit(u) {
+        var isNew = !u;
+        u = u || { IsActive: true };
+        var m = U.modal('<div class="modal-header"><h5 class="modal-title">' + (isNew ? 'Thêm tài khoản' : 'Sửa ' + esc(u.Username)) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form id="u-form" class="row g-2">' +
+          '<div class="col-6"><label class="form-label">Tên đăng nhập</label><input class="form-control" name="Username" value="' + esc(u.Username || '') + '"' + (isNew ? ' required pattern="[a-z0-9._-]{3,32}"' : ' readonly') + '></div>' +
+          '<div class="col-6"><label class="form-label">Họ tên</label><input class="form-control" name="FullName" required value="' + esc(u.FullName || '') + '"></div>' +
+          '<div class="col-6"><label class="form-label">Vai trò (Group)</label><select class="form-select" name="RoleCode">' + roles.map(function (r) { return '<option value="' + r.RoleCode + '"' + (u.RoleCode === r.RoleCode ? ' selected' : '') + '>' + esc(r.RoleName) + '</option>'; }).join('') + '</select></div>' +
+          '<div class="col-6"><label class="form-label">' + (isNew ? 'Mật khẩu ban đầu' : 'Mật khẩu mới (bỏ trống = giữ)') + '</label><input class="form-control" name="Password" type="text" minlength="6"' + (isNew ? ' required' : '') + ' autocomplete="new-password"></div>' +
+          '<div class="col-12"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="u-act"' + (u.IsActive ? ' checked' : '') + '><label class="form-check-label" for="u-act">Cho phép đăng nhập</label></div></div>' +
+          '</form><div class="small text-muted mt-2">Người dùng phải đổi mật khẩu ở lần đăng nhập kế tiếp khi được cấp mật khẩu mới.</div></div><div class="modal-footer"><button class="btn btn-primary" id="u-save">Lưu</button></div>');
+        m.body.querySelector('#u-save').onclick = function () {
+          var f = m.body.querySelector('#u-form');
+          if (!f.reportValidity()) return;
+          var d = U.formData(f);
+          if (!d.Password) delete d.Password;
+          U.api('admin.users.save', d).then(function () { m.hide(); U.toast('Đã lưu tài khoản'); users(body); }).catch(function () {});
+        };
+      }
+      U.$('#u-new', body).onclick = function () { edit(null); };
+      U.on(body, 'click', '[data-edit]', function (e, el) { edit(list.filter(function (u) { return u.Username === el.getAttribute('data-edit'); })[0]); });
+      U.on(body, 'click', '[data-reset]', function (e, el) {
+        var un = el.getAttribute('data-reset');
+        U.prompt('Đặt lại mật khẩu cho ' + un, 'Mật khẩu tạm (≥ 6 ký tự)', true).then(function (pw) {
+          if (!pw) return;
+          U.api('admin.users.resetPassword', { Username: un, NewPassword: pw }).then(function () { U.toast('Đã đặt lại mật khẩu – người dùng phải đổi khi đăng nhập'); }).catch(function () {});
+        });
+      });
+    }).catch(function () {});
+  }
+
+  function roles(body) {
+    U.api('admin.roles.list').then(function (d) {
+      var groups = {};
+      d.permissions.forEach(function (p) { (groups[p.group] = groups[p.group] || []).push(p); });
+      body.innerHTML = '<div class="card"><div class="card-header justify-content-between"><span>Ma trận phân quyền theo vai trò</span><button class="btn btn-sm btn-outline-primary" id="r-new"><i class="bi bi-plus-lg"></i> Vai trò mới</button></div>' +
+        '<div class="table-wrap"><table class="table table-sm perm-matrix"><thead><tr><th>Chức năng</th>' + d.roles.map(function (r) {
+          return '<th><div>' + esc(r.RoleName) + '</div><div class="mono small text-muted">' + r.RoleCode + '</div></th>';
+        }).join('') + '</tr></thead><tbody>' +
+        Object.keys(groups).map(function (g) {
+          return '<tr class="table-light"><td colspan="' + (d.roles.length + 1) + '" class="small fw-semibold text-uppercase text-muted">' + esc(g) + '</td></tr>' + groups[g].map(function (p) {
+            return '<tr><td>' + esc(p.label) + ' <span class="small text-muted mono">' + p.key + '</span></td>' + d.roles.map(function (r) {
+              var all = r.Permissions.indexOf('*') > -1;
+              return '<td><input class="form-check-input" type="checkbox" data-role="' + r.RoleCode + '" data-perm="' + p.key + '"' + (all || r.Permissions.indexOf(p.key) > -1 ? ' checked' : '') + (all ? ' disabled title="Toàn quyền"' : '') + '></td>';
+            }).join('') + '</tr>';
+          }).join('');
+        }).join('') +
+        '<tr class="table-light"><td colspan="' + (d.roles.length + 1) + '" class="small fw-semibold text-uppercase text-muted">Chỉ Quản trị hệ thống</td></tr>' +
+        ['Cấu hình chung (thông tin phòng XN, logo, in ấn)', 'Tài khoản', 'Vai trò & quyền', 'Kết nối dữ liệu năm', 'Hệ thống (cache, bảo trì)'].map(function (lb) {
+          return '<tr class="text-muted"><td>' + lb + '</td>' + d.roles.map(function (r) {
+            var all = r.Permissions.indexOf('*') > -1;
+            return '<td>' + (all ? '<i class="bi bi-check-lg text-success"></i>' : '<i class="bi bi-lock small" title="Chỉ vai trò Quản trị hệ thống"></i>') + '</td>';
+          }).join('') + '</tr>';
+        }).join('') +
+        '</tbody></table></div><div class="card-footer bg-white d-flex gap-2 justify-content-end">' +
+        d.roles.filter(function (r) { return r.Permissions.indexOf('*') === -1; }).map(function (r) { return '<button class="btn btn-sm btn-primary" data-save-role="' + r.RoleCode + '">Lưu ' + esc(r.RoleCode) + '</button>'; }).join('') + '</div></div>';
+      U.on(body, 'click', '[data-save-role]', function (e, el) {
+        var code = el.getAttribute('data-save-role');
+        var role = d.roles.filter(function (r) { return r.RoleCode === code; })[0];
+        var perms = U.$$('input[data-role="' + code + '"]:checked', body).map(function (x) { return x.getAttribute('data-perm'); });
+        U.api('admin.roles.save', { RoleCode: code, RoleName: role.RoleName, Permissions: perms }).then(function () { U.toast('Đã lưu quyền ' + code + ' (hiệu lực ngay)'); }).catch(function () {});
+      });
+      U.$('#r-new', body).onclick = function () {
+        var m = U.modal('<div class="modal-header"><h5 class="modal-title">Vai trò mới</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form id="rn-form" class="row g-2">' +
+          '<div class="col-5"><label class="form-label">Mã (A-Z, _)</label><input class="form-control mono" name="RoleCode" required pattern="[A-Za-z0-9_]{2,20}"></div>' +
+          '<div class="col-7"><label class="form-label">Tên vai trò</label><input class="form-control" name="RoleName" required></div></form></div>' +
+          '<div class="modal-footer"><button class="btn btn-primary" id="rn-save">Tạo</button></div>', { size: 'sm' });
+        m.body.querySelector('#rn-save').onclick = function () {
+          var f = m.body.querySelector('#rn-form');
+          if (!f.reportValidity()) return;
+          var x = U.formData(f);
+          U.api('admin.roles.save', { RoleCode: x.RoleCode, RoleName: x.RoleName, Permissions: ['order.view'] }).then(function () { m.hide(); roles(body); }).catch(function () {});
+        };
+      };
+    }).catch(function () {});
+  }
+
+  /* ---------------------------------------------------------------- GIÁ & CHIẾT KHẤU (quyền admin.price) */
+  function pricing(body) {
+    var TIER = { ALL: 'Tất cả hạng', NORMAL: 'Thường', VIP: 'VIP', VVIP: 'VVIP' };
+    var data = null, filter = '';
+    var today = U.today();
+    function status(r) {
+      if (!r.IsActive) return '<span class="st st-UNPAID">Tắt</span>';
+      if (r.FromDate && r.FromDate > today) return '<span class="st st-IN_PROGRESS">Chưa đến ngày</span>';
+      if (r.ToDate && r.ToDate < today) return '<span class="st st-CANCELLED">Hết hạn</span>';
+      return '<span class="st st-COMPLETED">Đang áp dụng</span>';
+    }
+    function level(r) { return r.Mode === 'PERCENT' ? r.Value + '%' : U.money(r.Value); }
+    function panelName(c) { return c === '*' ? 'Mọi nhóm XN' : ((App.panel(c) || {}).PanelName || c); }
+    function render() {
+      var cat = App.state.catalog;
+      var rules = data.rules.slice().sort(function (a, b) { return a.Kind === b.Kind ? (a.RuleID < b.RuleID ? -1 : 1) : (a.Kind === 'RETURN' ? -1 : 1); });
+      body.innerHTML = '<div class="row g-3"><div class="col-xl-7">' +
+        '<div class="card mb-3"><div class="card-header justify-content-between"><span><i class="bi bi-magic"></i> Quy tắc chiết khấu tự động</span>' +
+          '<button class="btn btn-sm btn-primary" id="kr-new"><i class="bi bi-plus-lg"></i> Thêm quy tắc</button></div>' +
+        (rules.length ? '<div class="table-wrap"><table class="table table-sm align-middle mb-0"><thead><tr><th>Mã</th><th>Loại</th><th>Áp dụng cho</th><th class="text-end">Mức giảm</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead><tbody>' +
+          rules.map(function (r) {
+            return '<tr><td class="mono small">' + esc(r.RuleID) + '</td><td class="text-nowrap small">' + (r.Kind === 'RETURN' ? '<i class="bi bi-arrow-repeat"></i> Tái khám' : '<i class="bi bi-collection"></i> Nhóm XN') + '</td>' +
+              '<td class="small">' + (r.Kind === 'PANEL' ? esc(panelName(r.PanelCode)) + '<br>' : '') + '<span class="text-muted">' + esc(TIER[r.Tier] || r.Tier) + '</span></td>' +
+              '<td class="text-end fw-semibold tabular">' + level(r) + '</td>' +
+              '<td class="small text-nowrap">' + U.vnDate(r.FromDate) + ' → ' + (r.ToDate ? U.vnDate(r.ToDate) : '<span class="text-muted">không thời hạn</span>') + '</td>' +
+              '<td>' + status(r) + '</td><td class="text-nowrap"><button class="btn btn-sm btn-light" data-kedit="' + esc(r.RuleID) + '" title="Sửa"><i class="bi bi-pencil"></i></button> ' +
+              '<button class="btn btn-sm btn-light text-danger" data-kdel="' + esc(r.RuleID) + '" title="Xóa"><i class="bi bi-trash"></i></button></td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="card-body">' + U.empty('Chưa có quy tắc. Bấm "Thêm quy tắc" để tạo giảm giá tái khám hoặc khuyến mãi theo nhóm XN.', 'bi-tags') + '</div>') + '</div>' +
+        '<div class="card mb-3"><div class="card-header">Cách tính</div><div class="card-body"><form id="ks-form" class="row g-3 align-items-end">' +
+          '<div class="col-md-7"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ks-stack"' + (data.settings.stack ? ' checked' : '') + '>' +
+            '<label class="form-check-label" for="ks-stack"><b>Cộng dồn</b> KM nhóm XN và giảm tái khám</label></div><div class="form-text">Tắt = chỉ áp dụng mức giảm có lợi hơn cho khách.</div></div>' +
+          '<div class="col-md-3"><label class="form-label" for="ks-round">Làm tròn tiền giảm</label><select class="form-select" id="ks-round">' +
+            [1, 500, 1000, 5000, 10000].map(function (v) { return '<option value="' + v + '"' + (data.settings.round === v ? ' selected' : '') + '>' + (v === 1 ? 'Không làm tròn' : U.num(v) + ' đ') + '</option>'; }).join('') + '</select></div>' +
+          '<div class="col-md-2 text-end"><button class="btn btn-outline-primary" type="submit">Lưu</button></div></form></div></div>' +
+        '<div class="alert alert-light border small mb-0"><b>Cách áp dụng khi tạo phiếu:</b><ul class="mb-0 ps-3">' +
+          '<li><b>KM theo nhóm XN</b> tính trên tiền từng nhóm trong thời gian hiệu lực (để trống "Đến ngày" = không thời hạn). Nhiều quy tắc khớp → lấy mức có lợi nhất.</li>' +
+          '<li><b>Tái khám</b>: bệnh nhân đã có phiếu (chưa hủy) với ngày khám trước đó → giảm theo <b>hạng</b> (Thường / VIP / VVIP) trên phần tổng còn lại.</li>' +
+          '<li>Chiết khấu tự điền vào phiếu kèm chi tiết; người có quyền vẫn sửa tay được, và có nút "↺ Tính tự động" để áp lại quy tắc.</li>' +
+          '<li>Đổi hạng bệnh nhân trong hồ sơ BN (cần quyền "Sửa đơn giá / chiết khấu").</li></ul></div></div>' +
+        // ---- Bảng giá
+        '<div class="col-xl-5"><div class="card"><div class="card-header justify-content-between flex-wrap gap-2"><span><i class="bi bi-cash-coin"></i> Bảng giá</span>' +
+          '<div class="d-flex gap-2"><input class="form-control form-control-sm" id="pp-q" placeholder="Lọc tên / mã…" style="width:150px" value="' + esc(filter) + '">' +
+          '<button class="btn btn-sm btn-primary" id="pp-save"><i class="bi bi-save"></i> Lưu bảng giá</button></div></div>' +
+          '<div style="max-height:70vh;overflow:auto"><table class="table table-sm align-middle mb-0 price-table"><tbody>' +
+          cat.panels.map(function (p) {
+            var tests = App.testsOfPanel(p.PanelCode);
+            return '<tr class="table-light" data-prow="' + p.PanelCode + '"><td colspan="2"><b>' + esc(p.PanelName) + '</b> <span class="mono small text-muted">' + p.PanelCode + '</span>' +
+              '<select class="form-select form-select-sm d-inline-block w-auto ms-2" data-pmode="' + p.PanelCode + '"><option value="TEST"' + (p.PricingMode !== 'PANEL' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Trọn gói</option></select></td>' +
+              '<td style="width:130px"><input class="form-control form-control-sm text-end tabular" data-pprice="' + p.PanelCode + '" value="' + U.num(p.Price || 0) + '"' + (p.PricingMode === 'PANEL' ? '' : ' disabled') + '></td></tr>' +
+              tests.map(function (t) {
+                return '<tr data-trow="' + t.TestCode + '" data-k="' + esc(U.esc(t.TestName + ' ' + t.TestCode + ' ' + p.PanelName).toLowerCase()) + '"><td class="ps-4 small">' + esc(t.TestName) + '</td><td class="mono small text-muted">' + t.TestCode + '</td>' +
+                  '<td><input class="form-control form-control-sm text-end tabular" data-tprice="' + t.TestCode + '" value="' + U.num(t.Price || 0) + '"></td></tr>';
+              }).join('');
+          }).join('') + '</tbody></table></div><div class="card-footer bg-white small text-muted">Chỉ số dùng chung nhiều nhóm có cùng 1 đơn giá. Nhóm "Trọn gói" tính theo giá nhóm.</div></div></div></div>';
+      applyFilter();
+    }
+    function applyFilter() {
+      var q = filter.trim().toLowerCase();
+      U.$$('tr[data-trow]', body).forEach(function (tr) { tr.style.display = !q || tr.getAttribute('data-k').indexOf(q) > -1 ? '' : 'none'; });
+    }
+    function ruleModal(r) {
+      var isNew = !r;
+      r = r || { Kind: 'RETURN', Tier: 'NORMAL', PanelCode: '', Mode: 'PERCENT', Value: '', FromDate: today, ToDate: '', IsActive: true, Note: '' };
+      var cat = App.state.catalog;
+      var m = U.modal('<div class="modal-header"><h5 class="modal-title">' + (isNew ? 'Thêm quy tắc chiết khấu' : 'Sửa ' + esc(r.RuleID)) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
+        '<div class="modal-body"><form id="kr-form" class="row g-3">' +
+          '<div class="col-12"><label class="form-label">Loại</label><div class="d-flex gap-3">' +
+            '<div class="form-check"><input class="form-check-input" type="radio" name="Kind" id="kk1" value="RETURN"' + (r.Kind === 'RETURN' ? ' checked' : '') + '><label class="form-check-label" for="kk1">Giảm khi <b>tái khám</b> (lần 2 trở đi)</label></div>' +
+            '<div class="form-check"><input class="form-check-input" type="radio" name="Kind" id="kk2" value="PANEL"' + (r.Kind === 'PANEL' ? ' checked' : '') + '><label class="form-check-label" for="kk2">Giảm theo <b>nhóm XN</b></label></div></div></div>' +
+          '<div class="col-md-6" id="kr-panel"><label class="form-label">Nhóm xét nghiệm</label><select class="form-select" name="PanelCode"><option value="*"' + (r.PanelCode === '*' ? ' selected' : '') + '>Mọi nhóm XN</option>' +
+            cat.panels.map(function (p) { return '<option value="' + p.PanelCode + '"' + (r.PanelCode === p.PanelCode ? ' selected' : '') + '>' + esc(p.PanelName) + ' (' + p.PanelCode + ')</option>'; }).join('') + '</select></div>' +
+          '<div class="col-md-6"><label class="form-label">Hạng bệnh nhân</label><select class="form-select" name="Tier">' +
+            Object.keys(TIER).map(function (k) { return '<option value="' + k + '"' + (r.Tier === k ? ' selected' : '') + '>' + TIER[k] + '</option>'; }).join('') + '</select></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Kiểu giảm</label><select class="form-select" name="Mode"><option value="PERCENT"' + (r.Mode === 'PERCENT' ? ' selected' : '') + '>%</option><option value="AMOUNT"' + (r.Mode === 'AMOUNT' ? ' selected' : '') + '>Số tiền</option></select></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Mức giảm</label><input class="form-control tabular" name="Value" inputmode="decimal" required value="' + esc(r.Value) + '"></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Từ ngày</label><input type="date" class="form-control" name="FromDate" required value="' + esc(r.FromDate || today) + '"></div>' +
+          '<div class="col-6 col-md-3"><label class="form-label">Đến ngày</label><input type="date" class="form-control" name="ToDate" value="' + esc(r.ToDate || '') + '"><div class="form-text">Trống = không thời hạn</div></div>' +
+          '<div class="col-md-8"><label class="form-label">Ghi chú</label><input class="form-control" name="Note" value="' + esc(r.Note || '') + '" placeholder="vd Khuyến mãi tháng 11"></div>' +
+          '<div class="col-md-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="kr-act"' + (r.IsActive ? ' checked' : '') + '><label class="form-check-label" for="kr-act">Đang áp dụng</label></div></div>' +
+        '</form></div><div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Đóng</button><button class="btn btn-primary" id="kr-save">Lưu quy tắc</button></div>', { size: 'lg' });
+      var f = m.body.querySelector('#kr-form');
+      var sync = function () { m.body.querySelector('#kr-panel').style.display = f.querySelector('input[name="Kind"]:checked').value === 'PANEL' ? '' : 'none'; };
+      U.$$('input[name="Kind"]', f).forEach(function (x) { x.onchange = sync; });
+      sync();
+      m.body.querySelector('#kr-save').onclick = function () {
+        if (!f.reportValidity()) return;
+        var d = U.formData(f);
+        if (!isNew) d.RuleID = r.RuleID;
+        if (d.Kind !== 'PANEL') d.PanelCode = '';
+        d.Value = String(d.Value).replace(/\./g, '').replace(',', '.');
+        U.api('admin.discount.save', { rule: d }).then(function (res) { data = res; m.hide(); U.toast('Đã lưu quy tắc'); return refreshCatalog(); }).catch(function () {});
+      };
+    }
+    function refreshCatalog() { return U.api('catalog.get').then(function (c) { App.setCatalog(c); render(); }); }
+    function load() {
+      U.api('admin.discount.list').then(function (d) { data = d; render(); }).catch(function () {});
+    }
+    U.on(body, 'click', '#kr-new', function () { ruleModal(null); });
+    U.on(body, 'click', '[data-kedit]', function (e, el) { ruleModal(data.rules.filter(function (r) { return r.RuleID === el.getAttribute('data-kedit'); })[0]); });
+    U.on(body, 'click', '[data-kdel]', function (e, el) {
+      var id = el.getAttribute('data-kdel');
+      U.confirm('Xóa quy tắc ' + id, 'Phiếu đã tạo giữ nguyên chiết khấu cũ. Phiếu mới sẽ không áp dụng quy tắc này nữa.', 'Xóa', true).then(function (ok) {
+        if (ok) U.api('admin.discount.delete', { RuleID: id }).then(function (res) { data = res; U.toast('Đã xóa ' + id); return refreshCatalog(); }).catch(function () {});
+      });
+    });
+    U.on(body, 'submit', '#ks-form', function (e) {
+      e.preventDefault();
+      U.api('admin.discount.settings', { stack: U.$('#ks-stack', body).checked, round: Number(U.$('#ks-round', body).value) }).then(function (res) {
+        data = res; App.state.settings.DISCOUNT_STACK = res.settings.stack ? 'TRUE' : 'FALSE'; App.state.settings.DISCOUNT_ROUND = String(res.settings.round);
+        U.toast('Đã lưu cách tính chiết khấu'); render();
+      }).catch(function () {});
+    });
+    U.on(body, 'input', '#pp-q', function (e) { filter = e.target.value; applyFilter(); });
+    U.on(body, 'change', '[data-pmode]', function (e, el) {
+      var inp = U.$('[data-pprice="' + el.getAttribute('data-pmode') + '"]', body);
+      inp.disabled = el.value !== 'PANEL';
+    });
+    U.on(body, 'click', '#pp-save', function (e, el) {
+      var num = function (v) { return Number(String(v).replace(/\D/g, '')) || 0; };
+      var cat = App.state.catalog;
+      var panels = cat.panels.map(function (p) {
+        return { PanelCode: p.PanelCode, PricingMode: U.$('[data-pmode="' + p.PanelCode + '"]', body).value, Price: num(U.$('[data-pprice="' + p.PanelCode + '"]', body).value) };
+      }).filter(function (x) { var p = App.panel(x.PanelCode); return p.PricingMode !== x.PricingMode || Number(p.Price || 0) !== x.Price; });
+      var seen = {}, tests = [];
+      U.$$('[data-tprice]', body).forEach(function (inp) { var c = inp.getAttribute('data-tprice'); if (!seen[c]) seen[c] = inp; });   // các ô cùng mã đã đồng bộ khi gõ
+      Object.keys(seen).forEach(function (c) { var v = num(seen[c].value); if (v !== Number(App.test(c).Price || 0)) tests.push({ TestCode: c, Price: v }); });
+      if (!panels.length && !tests.length) { U.toast('Chưa có thay đổi giá', 'warn'); return; }
+      el.disabled = true;
+      U.api('admin.price.save', { panels: panels, tests: tests }).then(function (r) { App.setCatalog(r.catalog); U.toast('Đã cập nhật ' + r.changed + ' mục giá'); render(); })
+        .catch(function () {}).finally(function () { el.disabled = false; });
+    });
+    // chỉ số xuất hiện ở nhiều nhóm: gõ ở 1 chỗ → đồng bộ các ô cùng mã
+    U.on(body, 'input', '[data-tprice]', function (e, el) {
+      var c = el.getAttribute('data-tprice');
+      U.$$('[data-tprice="' + c + '"]', body).forEach(function (x) { if (x !== el) x.value = el.value; });
+    });
+    load();
+  }
+
+  function catalog(body) {
+    var cat = App.state.catalog;
+    var canP = App.can('admin.price');   // giá chỉ sửa được khi có quyền Bảng giá (thẻ Giá & chiết khấu)
+    var lockP = canP ? '' : ' disabled title="Cần quyền Bảng giá & chiết khấu"';
+    var sel = cat.panels[0] ? cat.panels[0].PanelCode : null;
+    function render() {
+      cat = App.state.catalog;
+      body.innerHTML = '<div class="row g-3"><div class="col-lg-4"><div class="card"><div class="card-header justify-content-between"><span>Nhóm xét nghiệm</span><button class="btn btn-sm btn-outline-primary" id="c-newp"><i class="bi bi-plus-lg"></i></button></div>' +
+        '<div class="list-group list-group-flush">' + cat.panels.map(function (p) {
+          return '<button class="list-group-item list-group-item-action d-flex justify-content-between' + (p.PanelCode === sel ? ' active' : '') + '" data-psel="' + p.PanelCode + '"><span><b>' + p.PanelCode + '</b> · ' + esc(p.PanelName) + '</span>' +
+            (p.IsActive ? '' : '<span class="small">ẩn</span>') + '</button>';
+        }).join('') + '</div></div></div><div class="col-lg-8" id="c-panel"></div>' +
+        '<div class="col-12"><div class="card"><div class="card-header justify-content-between"><span>Danh mục chỉ số (' + cat.tests.length + ')</span><div class="d-flex gap-2"><input class="form-control form-control-sm" id="c-tq" placeholder="Lọc…" style="width:180px"><button class="btn btn-sm btn-outline-primary" id="c-newt"><i class="bi bi-plus-lg"></i> Chỉ số</button></div></div>' +
+        '<div class="table-wrap" style="max-height:480px"><table class="table table-sm table-hover"><thead class="sticky-top"><tr><th>Mã</th><th>Tên chỉ số</th><th>Kiểu</th><th>Đơn vị</th><th>Nam</th><th>Nữ</th><th>Hiển thị tham chiếu</th><th class="text-end">Đơn giá</th><th></th></tr></thead><tbody id="c-tests">' +
+        cat.tests.slice().sort(function (a, b) { return a.SortOrder - b.SortOrder; }).map(function (t) {
+          var rg = function (a, b) { return (a === null ? '' : a) + (a !== null || b !== null ? ' – ' : '') + (b === null ? '' : b); };
+          return '<tr data-tedit="' + t.TestCode + '"><td class="mono small">' + t.TestCode + '</td><td>' + esc(t.TestName) + '</td><td class="small">' + t.ResultType + '</td><td class="small">' + esc(t.Unit || '') + '</td>' +
+            '<td class="small tabular">' + rg(t.RefMinM, t.RefMaxM) + '</td><td class="small tabular">' + rg(t.RefMinF, t.RefMaxF) + '</td><td class="small">' + U.ml(t.RefText || '') + '</td>' +
+            '<td class="text-end tabular">' + U.num(t.Price) + '</td><td>' + (t.IsActive ? '' : '<span class="small text-muted">ẩn</span>') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div></div></div>';
+      renderPanel();
+    }
+    function renderPanel(isNew) {
+      var box = U.$('#c-panel', body);
+      var p = isNew ? { PanelCode: '', PanelName: '', PrintTitle: 'PHIẾU KẾT QUẢ XÉT NGHIỆM', PricingMode: 'TEST', Price: 0, IsActive: true, SortOrder: cat.panels.length + 1 } : App.panel(sel);
+      if (!p) { box.innerHTML = ''; return; }
+      var members = isNew ? [] : App.testsOfPanel(p.PanelCode).map(function (t) { return t.TestCode; });
+      box.innerHTML = '<div class="card"><div class="card-header">' + (isNew ? 'Nhóm mới' : 'Nhóm ' + p.PanelCode) + '</div><div class="card-body"><form id="p-form" class="row g-2">' +
+        '<div class="col-3"><label class="form-label">Mã</label><input class="form-control mono" name="PanelCode" value="' + esc(p.PanelCode) + '"' + (isNew ? ' required' : ' readonly') + '></div>' +
+        '<div class="col-6"><label class="form-label">Tên nhóm</label><input class="form-control" name="PanelName" required value="' + esc(p.PanelName) + '"></div>' +
+        '<div class="col-3"><label class="form-label">Thứ tự</label><input class="form-control" name="SortOrder" value="' + esc(p.SortOrder) + '"></div>' +
+        '<div class="col-6"><label class="form-label">Tiêu đề phiếu in</label><input class="form-control" name="PrintTitle" value="' + esc(p.PrintTitle || '') + '"></div>' +
+        '<div class="col-6"><label class="form-label">Phụ đề phiếu in</label><input class="form-control" name="PrintSubtitle" value="' + esc(p.PrintSubtitle || '') + '"></div>' +
+        '<div class="col-4"><label class="form-label">Cách tính giá</label><select class="form-select" name="PricingMode"' + lockP + '><option value="TEST"' + (p.PricingMode === 'TEST' ? ' selected' : '') + '>Tổng giá chỉ số</option><option value="PANEL"' + (p.PricingMode === 'PANEL' ? ' selected' : '') + '>Giá trọn gói nhóm</option></select></div>' +
+        '<div class="col-4"><label class="form-label">Giá nhóm (đ)</label><input class="form-control tabular" name="Price" value="' + esc(p.Price || 0) + '"' + lockP + '></div>' +
+        '<div class="col-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="p-act"' + (p.IsActive ? ' checked' : '') + '><label class="form-check-label" for="p-act">Đang sử dụng</label></div></div>' +
+        '<div class="col-4"><label class="form-label">Khổ giấy in</label><select class="form-select" name="PageSize">' +
+          [['', 'Theo cấu hình chung (' + esc(App.setting('PRINT_PAGE_SIZE', 'A5')) + ')'], ['A4', 'A4'], ['A5', 'A5']].map(function (o2) { return '<option value="' + o2[0] + '"' + ((p.PageSize || '') === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="col-8"><label class="form-label">ID mẫu in Google Docs riêng (tuỳ chọn)</label><input class="form-control mono" name="TemplateDocId" value="' + esc(p.TemplateDocId || '') + '" placeholder="Bỏ trống = dùng mẫu chuẩn tự sinh"></div>' +
+        '</form><label class="form-label mt-3">Chỉ số thuộc nhóm (thứ tự in theo thứ tự chọn)</label><div class="test-pick" style="max-height:260px;overflow:auto"><div class="d-flex flex-wrap column-gap-3">' +
+        cat.tests.map(function (t) {
+          return '<div class="form-check" style="min-width:220px"><input class="form-check-input" type="checkbox" id="pm-' + t.TestCode + '" value="' + t.TestCode + '"' + (members.indexOf(t.TestCode) > -1 ? ' checked' : '') + '>' +
+            '<label class="form-check-label small" for="pm-' + t.TestCode + '">' + esc(t.TestName) + ' <span class="text-muted mono">' + t.TestCode + '</span></label></div>';
+        }).join('') + '</div></div></div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="p-save">Lưu nhóm</button></div></div>';
+      var order = members.slice();
+      U.on(box, 'change', '.test-pick input', function (e, el) {
+        if (el.checked) order.push(el.value); else order = order.filter(function (c) { return c !== el.value; });
+      });
+      U.$('#p-save', box).onclick = function () {
+        var f = U.$('#p-form', box);
+        if (!f.reportValidity()) return;
+        var d = U.formData(f);
+        d.Price = Number(String(d.Price).replace(/\D/g, '')) || 0;
+        U.api('admin.catalog.savePanel', { panel: d, tests: order }).then(function (c) {
+          App.setCatalog(c); sel = String(d.PanelCode).toUpperCase(); U.toast('Đã lưu nhóm ' + sel); render();
+        }).catch(function () {});
+      };
+    }
+    function editTest(t) {
+      var isNew = !t;
+      t = t || { ResultType: 'NUM', IsActive: true, SortOrder: cat.tests.length + 1, Price: 0, RefMinM: null, RefMaxM: null, RefMinF: null, RefMaxF: null };
+      var v = function (x) { return x === null || x === undefined ? '' : x; };
+      var m = U.modal('<div class="modal-header"><h5 class="modal-title">' + (isNew ? 'Thêm chỉ số' : 'Chỉ số ' + t.TestCode) + '</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form id="t-form" class="row g-2">' +
+        '<div class="col-4"><label class="form-label">Mã</label><input class="form-control mono" name="TestCode" required value="' + esc(v(t.TestCode)) + '"' + (isNew ? '' : ' readonly') + '></div>' +
+        '<div class="col-8"><label class="form-label">Tên hiển thị</label><input class="form-control" name="TestName" required value="' + esc(v(t.TestName)) + '"></div>' +
+        '<div class="col-4"><label class="form-label">Kiểu kết quả</label><select class="form-select" name="ResultType">' + [['NUM', 'Số (có ngưỡng)'], ['QUAL', 'Âm/Dương tính'], ['BLOOD', 'Nhóm máu'], ['TEXT', 'Văn bản']].map(function (o) {
+          return '<option value="' + o[0] + '"' + (t.ResultType === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="col-4"><label class="form-label">Đơn vị</label><input class="form-control" name="Unit" value="' + esc(v(t.Unit)) + '"></div>' +
+        '<div class="col-4"><label class="form-label">Đơn giá (đ)</label><input class="form-control tabular" name="Price" value="' + esc(v(t.Price)) + '"' + lockP + '></div>' +
+        '<div class="col-3"><label class="form-label">Nam – Min</label><input class="form-control" name="RefMinM" value="' + esc(v(t.RefMinM)) + '"></div>' +
+        '<div class="col-3"><label class="form-label">Nam – Max</label><input class="form-control" name="RefMaxM" value="' + esc(v(t.RefMaxM)) + '"></div>' +
+        '<div class="col-3"><label class="form-label">Nữ – Min</label><input class="form-control" name="RefMinF" value="' + esc(v(t.RefMinF)) + '"></div>' +
+        '<div class="col-3"><label class="form-label">Nữ – Max</label><input class="form-control" name="RefMaxF" value="' + esc(v(t.RefMaxF)) + '"></div>' +
+        '<div class="col-8"><label class="form-label">Khoảng tham chiếu hiển thị trên phiếu <span class="text-muted fw-normal small">· Enter để xuống dòng</span></label>' +
+          '<textarea class="form-control" name="RefText" rows="2" placeholder="VD:&#10;Nam ≤ 42&#10;Nữ ≤ 32 U/L/37°C">' + esc(v(t.RefText)) + '</textarea></div>' +
+        '<div class="col-2"><label class="form-label">Thứ tự</label><input class="form-control" name="SortOrder" value="' + esc(v(t.SortOrder)) + '"></div>' +
+        '<div class="col-2 d-flex align-items-end"><div class="form-check"><input class="form-check-input" type="checkbox" name="IsActive" id="t-act"' + (t.IsActive ? ' checked' : '') + '><label class="form-check-label" for="t-act">Dùng</label></div></div>' +
+        '</form><div class="small text-muted mt-2">Ngưỡng dùng để gắn cờ ↑/↓ tự động. Bỏ trống Nữ = dùng ngưỡng Nam.</div></div><div class="modal-footer"><button class="btn btn-primary" id="t-save">Lưu</button></div>', { size: 'lg' });
+      m.body.querySelector('#t-save').onclick = function () {
+        var f = m.body.querySelector('#t-form');
+        if (!f.reportValidity()) return;
+        var d = U.formData(f);
+        d.Price = Number(String(d.Price).replace(/\D/g, '')) || 0;
+        U.api('admin.catalog.saveTest', d).then(function (c) { App.setCatalog(c); m.hide(); U.toast('Đã lưu chỉ số'); render(); }).catch(function () {});
+      };
+    }
+    body.addEventListener('click', function (e) {
+      var ps = e.target.closest('[data-psel]');
+      if (ps) { sel = ps.getAttribute('data-psel'); render(); return; }
+      if (e.target.closest('#c-newp')) { U.$$('[data-psel]', body).forEach(function (x) { x.classList.remove('active'); }); renderPanel(true); return; }
+      if (e.target.closest('#c-newt')) { editTest(null); return; }
+      var te = e.target.closest('[data-tedit]');
+      if (te) editTest(App.test(te.getAttribute('data-tedit')));
+    });
+    body.addEventListener('input', function (e) {
+      if (e.target.id !== 'c-tq') return;
+      var q = e.target.value.toLowerCase();
+      U.$$('#c-tests tr', body).forEach(function (tr) { tr.style.display = tr.textContent.toLowerCase().indexOf(q) > -1 ? '' : 'none'; });
+    });
+    render();
+  }
+
+  function doctors(body) {
+    var list = App.state.catalog.doctors;
+    body.innerHTML = '<div class="card" style="max-width:720px"><div class="card-header justify-content-between"><span>Bác sĩ / nguồn chỉ định</span></div><div class="table-wrap"><table class="table table-sm"><thead><tr><th>Tên</th><th>Thứ tự</th><th>Dùng</th><th></th></tr></thead><tbody>' +
+      list.map(function (d, i) {
+        return '<tr data-i="' + i + '"><td><input class="form-control form-control-sm" value="' + esc(d.DoctorName) + '" data-f="name"></td><td style="width:90px"><input class="form-control form-control-sm" value="' + esc(d.SortOrder) + '" data-f="sort"></td>' +
+          '<td><input class="form-check-input" type="checkbox" data-f="active"' + (d.IsActive ? ' checked' : '') + '></td><td><button class="btn btn-sm btn-light" data-dsave="' + i + '">Lưu</button></td></tr>';
+      }).join('') + '<tr><td><input class="form-control form-control-sm" id="dn-name" placeholder="Thêm bác sĩ mới…"></td><td><input class="form-control form-control-sm" id="dn-sort" value="' + (list.length + 1) + '"></td><td></td><td><button class="btn btn-sm btn-primary" id="dn-add">Thêm</button></td></tr>' +
+      '</tbody></table></div></div>';
+    U.on(body, 'click', '[data-dsave]', function (e, el) {
+      var i = +el.getAttribute('data-dsave'), tr = el.closest('tr');
+      U.api('admin.doctors.save', { OriginalName: list[i].DoctorName, DoctorName: tr.querySelector('[data-f=name]').value, SortOrder: tr.querySelector('[data-f=sort]').value, IsActive: tr.querySelector('[data-f=active]').checked })
+        .then(function (c) { App.setCatalog(c); U.toast('Đã lưu'); doctors(body); }).catch(function () {});
+    });
+    U.$('#dn-add', body).onclick = function () {
+      var n = U.$('#dn-name', body).value.trim();
+      if (!n) return;
+      U.api('admin.doctors.save', { DoctorName: n, SortOrder: U.$('#dn-sort', body).value, IsActive: true }).then(function (c) { App.setCatalog(c); doctors(body); }).catch(function () {});
+    };
+  }
+
+  function wards(body) {
+    var map = App.state.catalog.wards || {};
+    var provinces = App.lookup('PROVINCE');
+    var cur = provinces[0] || 'Gia Lai';
+    function render() {
+      map = App.state.catalog.wards || {};
+      var list = map[cur] || [];
+      body.innerHTML = '<div class="row g-3"><div class="col-lg-4"><div class="card"><div class="card-header">Tỉnh / Thành phố</div><div class="list-group list-group-flush">' +
+        provinces.map(function (pv) {
+          return '<button class="list-group-item list-group-item-action d-flex justify-content-between' + (pv === cur ? ' active' : '') + '" data-pv="' + esc(pv) + '"><span>' + esc(pv) + '</span><span class="small">' + ((map[pv] || []).length || '') + '</span></button>';
+        }).join('') + '</div><div class="card-body"><div class="input-group input-group-sm"><input class="form-control" id="w-newpv" placeholder="Thêm tỉnh/TP…"><button class="btn btn-outline-primary" id="w-addpv">Thêm</button></div></div></div></div>' +
+        '<div class="col-lg-8"><div class="card"><div class="card-header justify-content-between"><span>Phường / Xã – ' + esc(cur) + ' (' + list.length + ')</span></div><div class="card-body">' +
+        '<label class="form-label">Mỗi dòng 1 đơn vị, ghi rõ "Phường …" hoặc "Xã …". Thứ tự dòng = thứ tự gợi ý.</label>' +
+        '<textarea class="form-control mono" id="w-list" rows="16" style="font-size:12.5px">' + esc(list.join('\n')) + '</textarea>' +
+        '<div class="form-text">Dán nhanh danh sách từ văn bản chính thức (vd Nghị quyết sắp xếp ĐVHC cấp xã). Dòng trùng tự loại bỏ.</div></div>' +
+        '<div class="card-footer bg-white text-end"><button class="btn btn-primary" id="w-save"><i class="bi bi-save"></i> Lưu danh mục</button></div></div></div></div>';
+    }
+    body.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-pv]');
+      if (b) { cur = b.getAttribute('data-pv'); render(); return; }
+      if (e.target.closest('#w-addpv')) {
+        var v = U.$('#w-newpv', body).value.trim();
+        if (v && provinces.indexOf(v) === -1) provinces.push(v);
+        if (v) { cur = v; render(); }
+        return;
+      }
+      if (e.target.closest('#w-save')) {
+        var lines = U.$('#w-list', body).value.split(/\r?\n/).map(function (x) { return x.trim(); }).filter(String);
+        U.api('admin.wards.save', { Province: cur, wards: lines }).then(function (c) {
+          App.setCatalog(c); provinces = App.lookup('PROVINCE'); U.toast('Đã lưu ' + (c.wards[cur] || []).length + ' phường/xã của ' + cur); render();
+        }).catch(function () {});
+      }
+    });
+    render();
+  }
+
+  function years(body) {
+    var modeLabel = { RW: '<span class="st st-COMPLETED">Đang ghi</span>', FULL: '<span class="st st-IN_PROGRESS">Đầy – chỉ sửa</span>', RO: '<span class="st st-UNPAID">Khóa sổ</span>' };
+    function bar(pct) {
+      var c = pct >= 85 ? 'var(--danger)' : (pct >= 70 ? 'var(--warn)' : 'var(--brand)');
+      return '<div class="d-flex align-items-center gap-2" style="min-width:150px"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" style="width:' + Math.min(100, pct) + '%;background:' + c + '"></div></div>' +
+        '<span class="small tabular" style="width:46px">' + pct + '%</span></div>';
+    }
+    var lim = { orders: 20000, results: 150000 };
+    /** Số dòng so với ngưỡng: xanh < 80%, cam ≥ 80%, đỏ ≥ 100%. */
+    function rowsLine(label, n, max) {
+      var pct = max ? n / max * 100 : 0;
+      var cls = !max ? 'text-muted' : (pct >= 100 ? 'text-danger fw-semibold' : (pct >= 80 ? 'text-warning fw-semibold' : 'text-muted'));
+      return '<div class="small tabular ' + cls + '">' + label + ': ' + U.num(n) + (max ? ' / ' + U.num(max) + ' (' + Math.round(pct) + '%)' : '') + '</div>';
+    }
+    function render(list) {
+      var thisYear = new Date().getFullYear();
+      body.innerHTML = '<div class="row g-3"><div class="col-xl-8"><div class="card"><div class="card-header justify-content-between flex-wrap gap-2"><span>Google Sheet dữ liệu theo năm</span><div class="d-flex gap-2">' +
+        '<button class="btn btn-sm btn-light" id="y-cap"><i class="bi bi-speedometer2"></i> Đo dung lượng</button>' +
+        '<button class="btn btn-sm btn-light" id="y-opt" title="Xóa cột/dòng trống thừa ở mọi bảng: Config, Customers, các DB năm"><i class="bi bi-scissors"></i> Tối ưu dung lượng</button>' +
+        '<button class="btn btn-sm btn-primary" id="y-create"><i class="bi bi-plus-lg"></i> Tạo DB mới</button></div></div>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Số dòng / ngưỡng</th><th title="Ngày khám sớm nhất – muộn nhất có trong DB. Tra cứu/thống kê ngoài khoảng này không phải đọc DB đó">Khoảng ngày</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
+        list.map(function (y) {
+          return '<tr><td class="fw-bold">' + y.Year + '</td><td><a class="small" href="https://docs.google.com/spreadsheets/d/' + esc(y.SpreadsheetId) + '" target="_blank" rel="noopener">' + esc(y.Note || y.SpreadsheetId.substring(0, 12)) + ' <i class="bi bi-box-arrow-up-right"></i></a></td>' +
+            '<td>' + (modeLabel[y.Mode] || esc(y.Mode)) + '</td><td>' + bar(y.UsedPercent || 0) + '<div class="small text-muted tabular">' + U.num(y.UsedCells) + ' ô</div></td>' +
+            '<td>' + rowsLine('Phiếu', y.OrderRows || 0, lim.orders) + rowsLine('Kết quả', y.ResultRows || 0, lim.results) + '</td>' +
+            '<td class="small tabular">' + (y.MinDate ? U.vnDate(y.MinDate) + '<br>→ ' + (y.Mode === 'RW' ? '<span class="text-muted">đang ghi</span>' : U.vnDate(y.MaxDate)) : '<span class="text-muted">–</span>') + '</td>' +
+            '<td class="small text-muted">' + U.vnDateTime(y.CheckedAt) + '</td><td><button class="btn btn-sm btn-light" data-yedit="' + esc(y.SpreadsheetId) + '"><i class="bi bi-pencil"></i></button></td></tr>';
+        }).join('') + '</tbody></table></div></div>' +
+        '<div class="alert alert-light border small mt-3 mb-0"><b>Cách hệ thống xử lý:</b><ul class="mb-0 ps-3">' +
+          '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê chỉ đọc các DB có <b>khoảng ngày</b> giao với khoảng đang chọn.</li>' +
+          '<li>Hồ sơ bệnh nhân giữ sẵn danh sách lần khám → mở hồ sơ không phải đọc DB năm; lịch sử chỉ số chỉ đọc đúng các DB bệnh nhân có khám.</li>' +
+          '<li><b>Sang năm mới:</b> phiếu đầu tiên của năm tự tạo <span class="kbd">DB_' + (thisYear + 1) + '</span> (cùng thư mục Drive với DB cũ). Từ 15/12 hệ thống tạo sẵn DB năm sau. DB năm cũ giữ nguyên.</li>' +
+          '<li><b>DB đầy:</b> khi DB đang ghi chạm <b>ngưỡng số dòng</b> (Phiếu hoặc Kết quả, chỉnh bên phải) hoặc 85% dung lượng ô, hệ thống tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>); DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
+          '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li>' +
+          '<li><b>Tối ưu dung lượng:</b> xóa cột trống bên phải và dòng trống dư (giữ 200 dòng) ở mọi bảng. Hệ thống tự chạy lúc 01:00 hằng đêm; bấm nút để chạy ngay.</li></ul></div></div>' +
+        '<div class="col-xl-4"><div class="card mb-3"><div class="card-header"><i class="bi bi-sliders"></i> Ngưỡng tạo DB nối tiếp</div><div class="card-body"><form id="yl-form" class="row g-2">' +
+          '<div class="col-6"><label class="form-label" for="yl-o">Số phiếu tối đa</label><input class="form-control tabular" id="yl-o" name="orders" inputmode="numeric" value="' + lim.orders + '"></div>' +
+          '<div class="col-6"><label class="form-label" for="yl-r">Số dòng kết quả tối đa</label><input class="form-control tabular" id="yl-r" name="results" inputmode="numeric" value="' + lim.results + '"></div>' +
+          '<div class="col-12 form-text">Mỗi phiếu ~8–10 dòng kết quả nên <b>Results</b> thường chạm ngưỡng trước. Ngưỡng vừa phải giúp tra cứu, in, thống kê luôn nhanh. Nhập <b>0</b> = không giới hạn theo dòng (chỉ dựa trên 85% dung lượng ô).</div>' +
+          '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary btn-sm" id="yl-save"><i class="bi bi-save"></i> Lưu ngưỡng</button></div></div>' +
+        '<div class="card"><div class="card-header" id="y-title">Kết nối Sheet có sẵn</div><div class="card-body"><form id="y-form" class="row g-2">' +
+        '<div class="col-4"><label class="form-label">Năm</label><input class="form-control" name="Year" required inputmode="numeric" value="' + thisYear + '"></div>' +
+        '<div class="col-8"><label class="form-label">Trạng thái</label><select class="form-select" name="Mode"><option value="RW">Đang ghi</option><option value="FULL">Đầy – chỉ sửa</option><option value="RO">Khóa sổ (chỉ đọc)</option></select></div>' +
+        '<div class="col-12"><label class="form-label">Link hoặc ID Google Sheet</label><input class="form-control mono" name="SpreadsheetId" required placeholder="https://docs.google.com/spreadsheets/d/…"></div>' +
+        '<div class="col-12"><label class="form-label">Tên file Google Sheet</label><input class="form-control" name="Note" maxlength="100" placeholder="DB_' + thisYear + '"><div class="form-text">Sửa tên ở đây sẽ đổi tên file trên Google Drive. Để trống = giữ tên file hiện tại.</div></div></form>' +
+        '<div id="y-test" class="small mt-2"></div></div><div class="card-footer bg-white d-flex gap-2 justify-content-end"><button class="btn btn-light" id="y-check"><i class="bi bi-plug"></i> Kiểm tra</button><button class="btn btn-primary" id="y-save">Lưu</button></div></div>' +
+        '<div class="small text-muted mt-2">Dùng khi bạn tự tạo Sheet. Chia sẻ quyền <b>Editor</b> cho tài khoản deploy Web App. Muốn hệ thống tự tạo file, bấm "Tạo DB mới".</div></div></div>';
+      var form = U.$('#y-form', body);
+      U.on(body, 'click', '[data-yedit]', function (e, el) {
+        var y = list.filter(function (x) { return x.SpreadsheetId === el.getAttribute('data-yedit'); })[0];
+        form.Year.value = y.Year; form.Mode.value = y.Mode; form.SpreadsheetId.value = y.SpreadsheetId; form.Note.value = y.Note || '';
+        U.$('#y-title', body).textContent = 'Cập nhật ' + (y.Note || y.Year);
+      });
+      U.$('#y-check', body).onclick = function () {
+        U.api('admin.years.test', { SpreadsheetId: form.SpreadsheetId.value }).then(function (r) {
+          U.$('#y-test', body).innerHTML = r.ok ? '<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle"></i> Kết nối OK: <b>' + esc(r.name) + '</b>' +
+            (r.missing.length ? '<br>Bảng sẽ được tạo: ' + esc(r.missing.join(', ')) : '<br>Đủ bảng dữ liệu.') + '</div>' : '<div class="alert alert-danger py-2 mb-0">' + esc(r.error) + '</div>';
+        }).catch(function () {});
+      };
+      U.$('#y-save', body).onclick = function () {
+        if (!form.reportValidity()) return;
+        U.api('admin.years.save', U.formData(form)).then(function (l) { U.toast('Đã lưu kết nối'); render(l); }).catch(function () {});
+      };
+      U.$('#yl-save', body).onclick = function () {
+        var num = function (id) { return Number(String(U.$(id, body).value).replace(/[^\d]/g, '') || 0); };
+        U.api('admin.years.limits', { orders: num('#yl-o'), results: num('#yl-r') }).then(function (l) { lim = l; U.toast('Đã lưu ngưỡng tạo DB nối tiếp'); render(list); }).catch(function () {});
+      };
+      U.$('#y-cap', body).onclick = function () { U.api('admin.years.capacity').then(function (l) { U.toast('Đã cập nhật dung lượng'); render(l); }).catch(function () {}); };
+      U.$('#y-opt', body).onclick = function () {
+        var btn = this;
+        U.confirm('Tối ưu dung lượng', 'Xóa các cột trống bên phải và dòng trống dư bên dưới mỗi bảng (giữ lại 200 dòng trống để ghi tiếp). Dữ liệu không bị ảnh hưởng. Tab do bạn tự thêm vào file sẽ được giữ nguyên.', 'Tối ưu').then(function (ok) {
+          if (!ok) return;
+          btn.disabled = true;
+          U.api('admin.years.optimize').then(function (r) {
+            render(r.list);
+            // Báo cáo chi tiết từng file / từng sheet
+            var rowsHtml = r.results.map(function (f) {
+              var sh = f.sheets || [];
+              return '<tr class="table-light"><td colspan="4"><b>' + esc(f.name || f.id) + '</b> <span class="text-muted small">· giải phóng ' + U.num(f.freed || 0) + ' ô</span>' +
+                (f.error && !sh.length ? '<div class="text-danger small">' + esc(f.error) + '</div>' : '') + '</td></tr>' +
+                sh.map(function (x) {
+                  return '<tr><td class="ps-4 mono small">' + esc(x.sheet) + '</td><td class="small tabular">' + U.num(x.rows) + ' × ' + U.num(x.cols) + '</td>' +
+                    '<td class="small tabular">' + U.num(x.rowsAfter) + ' × ' + U.num(x.colsAfter) + '</td>' +
+                    '<td class="small">' + (x.error ? '<span class="text-danger">Lỗi: ' + esc(x.error) + '</span>' : (x.freed ? '<span class="text-success">−' + U.num(x.freed) + ' ô</span>' : '<span class="text-muted">Đã gọn</span>')) + '</td></tr>';
+                }).join('');
+            }).join('');
+            U.modal('<div class="modal-header"><h5 class="modal-title">Kết quả tối ưu dung lượng</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
+              '<div class="modal-body"><div class="mb-2">Tổng cộng giải phóng <b>' + U.num(r.freed) + '</b> ô trên ' + r.results.length + ' file.</div>' +
+              '<div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table table-sm align-middle mb-0"><thead><tr><th>Sheet</th><th>Trước (dòng × cột)</th><th>Sau</th><th>Kết quả</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div></div>' +
+              '<div class="modal-footer"><button class="btn btn-primary" data-bs-dismiss="modal">Đóng</button></div>', { size: 'lg' });
+          }).catch(function () {}).finally(function () { btn.disabled = false; });
+        });
+      };
+      U.$('#y-create', body).onclick = function () {
+        U.prompt('Tạo Google Sheet DB mới', 'Năm dữ liệu (vd ' + (thisYear + 1) + '). Nếu năm đã có DB, file mới là DB nối tiếp và DB cũ chuyển "Đầy – chỉ sửa".', true).then(function (v) {
+          if (!v) return;
+          U.api('admin.years.create', { Year: Number(v) }).then(function (r) { U.toast('Đã tạo ' + r.created.Note); render(r.list); }).catch(function () {});
+        });
+      };
+    }
+    Promise.all([U.api('admin.years.list'), U.api('admin.years.limits')]).then(function (r) { lim = r[1]; render(r[0]); }).catch(function () {});
+  }
+
+  function system(body) {
+    body.innerHTML = '<div class="row g-3"><div class="col-md-6"><div class="card"><div class="card-body"><h6>Bộ nhớ đệm (cache)</h6><p class="small text-muted">Danh mục, cấu hình, vai trò và kết nối năm được cache 6 giờ để tăng tốc. Xóa cache nếu bạn sửa trực tiếp trên Google Sheet.</p>' +
+      '<button class="btn btn-outline-primary" id="sy-cache"><i class="bi bi-arrow-repeat"></i> Xóa cache & tải lại danh mục</button></div></div></div>' +
+      '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Thông tin</h6><div class="small">Phiên bản máy chủ (Apps Script): <b>' + esc((App.state.settings || {}).APP_VERSION || 'không rõ – bản cũ') + '</b><br>Phiên bản giao diện (GitHub): <b>' + esc(App.FE_VERSION) + '</b>' +
+        (String((App.state.settings || {}).APP_VERSION || '').split('.').slice(0, 2).join('.') !== App.FE_VERSION.split('.').slice(0, 2).join('.') ? '<br><span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Hai phiên bản khác nhau – kiểm tra lại bước cập nhật (dán Code.gs + Deploy New version, upload đủ file giao diện, tải lại trang bằng Ctrl+F5)</span>' : '') + '<br>Chế độ: <b>' + (Api.isDemo ? 'DEMO (dữ liệu trong trình duyệt)' : 'Google Apps Script') + '</b><br>' +
+      'Kết nối năm: ' + App.state.years.map(function (y) { return y.Year + (y.Mode === 'RO' ? ' (RO)' : ''); }).join(', ') + '</div>' +
+      (Api.isDemo ? '<button class="btn btn-outline-danger mt-3" id="sy-reset"><i class="bi bi-trash"></i> Xóa dữ liệu DEMO & tạo lại</button>' : '') + '</div></div></div>' +
+      '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Chỉ mục lần khám</h6><p class="small text-muted">Mỗi hồ sơ bệnh nhân lưu sẵn danh sách lần khám (cột VisitLog, sheet Patients) để mở hồ sơ, xem lịch sử và tính tái khám nhanh dù có nhiều DB năm. ' +
+        'Tự cập nhật khi tạo/sửa/hủy phiếu và tự đối soát lúc 01:00. Chỉ cần dựng lại khi đã sửa/nhập phiếu trực tiếp trên Google Sheet.</p>' +
+        '<div class="small mb-2" id="sy-vis">Đang kiểm tra…</div><button class="btn btn-outline-primary" id="sy-vis-btn"><i class="bi bi-diagram-3"></i> Dựng lại chỉ mục</button></div></div></div></div>';
+    U.$('#sy-cache', body).onclick = function () {
+      U.api('admin.cache.clear').then(function () { return U.api('catalog.get'); }).then(function (c) { App.setCatalog(c); U.toast('Đã làm mới'); }).catch(function () {});
+    };
+    var visBox = U.$('#sy-vis', body);
+    var showVis = function (v) {
+      visBox.innerHTML = v.ready ? '<span class="text-success"><i class="bi bi-check-circle"></i> Đang dùng</span> · dựng lúc ' + U.vnDateTime(v.builtAt) +
+        (v.visits !== undefined ? ' · ' + U.num(v.visits) + ' lần khám / ' + U.num(v.patients) + ' BN' : '') +
+        (v.dirty ? '<br><span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Có lần ghi chỉ mục lỗi lúc ' + U.vnDateTime(v.dirty) + ' – sẽ tự đối soát lúc 01:00 (hoặc dựng lại ngay)</span>' : '')
+        : '<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Chưa dựng</span> – hệ thống đang đọc mọi DB năm (chậm hơn). Bấm "Dựng lại chỉ mục" hoặc chạy setup.';
+    };
+    U.api('admin.visits.status', {}, { silent: true }).then(showVis).catch(function () { visBox.textContent = ''; });
+    U.$('#sy-vis-btn', body).onclick = function () {
+      var b = this; b.disabled = true; visBox.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang đọc các DB năm…';
+      U.api('admin.visits.rebuild', {}).then(function (v) { showVis(v); U.toast('Đã dựng chỉ mục: ' + U.num(v.visits) + ' lần khám'); }).catch(function () {}).finally(function () { b.disabled = false; });
+    };
+    var r = U.$('#sy-reset', body);
+    if (r) r.onclick = function () { U.confirm('Xóa dữ liệu DEMO', 'Toàn bộ dữ liệu demo trong trình duyệt sẽ bị xóa và tạo lại.', 'Xóa', true).then(function (ok) { if (ok) Api.resetDemo(); }); };
+  }
+})(window.App);
