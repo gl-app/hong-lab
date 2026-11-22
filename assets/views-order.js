@@ -87,7 +87,7 @@
         var f = App.flag(t, r.Value, gender) || r.Flag || '';
         return '<tr><td class="text-muted">' + (i + 1) + '</td><td><div class="fw-medium">' + esc(t.TestName) + (App.Calc.is(t.TestCode) ? ' <span class="badge text-bg-light" title="' + esc(App.Calc.label(t.TestCode)) + '">ƒ tự tính</span>' : '') + '</div><div class="small text-muted mono">' + t.TestCode + '</div></td>' +
           '<td>' + resultInput(t, r.Value, gender, disabled) + '</td><td class="small text-muted">' + esc(t.Unit || '') + '</td>' +
-          '<td class="small">' + esc(ref) + '</td><td class="small flag-cell flag-' + f + '">' + U.flagLabel(f) + '</td></tr>';
+          '<td class="small">' + U.ml(ref) + '</td><td class="small flag-cell flag-' + f + '">' + U.flagLabel(f) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
   }
 
@@ -478,15 +478,16 @@
       if (pre) { localStorage.removeItem('lis_search_prefill'); App._searchState = JSON.parse(pre); }
     } catch (x) { /* ignore */ }
     var saved = App._searchState || { q: '', from: U.addDays(U.today(), -(App.rangeSetting('SEARCH_DEFAULT_DAYS') || 30)), to: U.today(), status: '', panelCode: '', doctor: '' };
+    var savedSt = saved.statuses || (saved.status ? [saved.status] : []), savedPc = saved.panelCodes || (saved.panelCode ? [saved.panelCode] : []);
     view.innerHTML =
       '<div class="card mb-3"><div class="card-body"><form id="s-form" class="row g-2 align-items-end">' +
         '<div class="col-lg-4"><label class="form-label">Từ khóa</label><input class="form-control" name="q" value="' + esc(saved.q) + '" placeholder="Mã phiếu XN-…, mã BN, họ tên, SĐT"></div>' +
         '<div class="col-6 col-lg-2"><label class="form-label">Từ ngày</label><input type="date" class="form-control" name="from" value="' + saved.from + '"></div>' +
         '<div class="col-6 col-lg-2"><label class="form-label">Đến ngày</label><input type="date" class="form-control" name="to" value="' + saved.to + '"></div>' +
-        '<div class="col-6 col-lg-2"><label class="form-label">Trạng thái</label><select class="form-select" name="status"><option value="">Tất cả</option>' +
-          ['REGISTERED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map(function (s) { return '<option value="' + s + '"' + (saved.status === s ? ' selected' : '') + '>' + U.statusLabel(s) + '</option>'; }).join('') + '</select></div>' +
-        '<div class="col-6 col-lg-2"><label class="form-label">Nhóm XN</label><select class="form-select" name="panelCode"><option value="">Tất cả</option>' +
-          App.state.catalog.panels.map(function (p) { return '<option value="' + p.PanelCode + '"' + (saved.panelCode === p.PanelCode ? ' selected' : '') + '>' + esc(p.PanelCode + ' – ' + p.PanelName) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="col-6 col-lg-2"><label class="form-label">Trạng thái</label>' +
+          App.multiSelect('statuses', ['REGISTERED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map(function (s) { return { value: s, label: U.statusLabel(s) }; }), savedSt) + '</div>' +
+        '<div class="col-6 col-lg-2"><label class="form-label">Nhóm XN</label>' +
+          App.multiSelect('panelCodes', App.state.catalog.panels.map(function (p) { return { value: p.PanelCode, label: p.PanelCode + ' – ' + p.PanelName, short: p.PanelCode }; }), savedPc) + '</div>' +
         '<div class="col-12 d-flex gap-2"><button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> Tìm kiếm</button>' +
           '<button class="btn btn-light" type="button" data-range="0">Hôm nay</button><button class="btn btn-light" type="button" data-range="7">7 ngày</button><button class="btn btn-light" type="button" data-range="30">30 ngày</button>' +
           (App.can('order.create') ? '<a class="btn btn-outline-primary ms-auto" href="#/order-new"><i class="bi bi-plus-lg"></i> Phiếu mới</a>' : '') + '</div>' +
@@ -495,14 +496,25 @@
 
     var form = U.$('#s-form', view);
     var scopeOk = App.bindScope(form.from, form.to, U.$('#s-scope', view), 'SEARCH_MAX_DAYS');
+    App.bindMultiSelect(form);
     function run() {
       var d = U.formData(form);
+      // Chọn nhiều: statuses / panelCodes (máy chủ ≥ 2.1.7). Chỉ 1 giá trị → gửi kèm status / panelCode cho máy chủ bản cũ.
+      d.statuses = App.msValues(form, 'statuses'); d.panelCodes = App.msValues(form, 'panelCodes');
+      d.status = d.statuses.length === 1 ? d.statuses[0] : ''; d.panelCode = d.panelCodes.length === 1 ? d.panelCodes[0] : '';
       // Mã phiếu đầy đủ → tìm thẳng, bỏ qua khoảng ngày; còn lại phải nằm trong giới hạn ngày
       if (!/^XN-\d{6}-\d+$/i.test(String(d.q || '').trim()) && !scopeOk()) { U.toast('Khoảng ngày vượt giới hạn – thu hẹp lại để tra cứu nhanh hơn', 'warn'); return; }
       App._searchState = d;
       U.$('#s-result', view).innerHTML = '<div class="empty"><div class="spinner-border text-secondary"></div></div>';
       Promise.all([U.api('order.search', d), App.Users.load().catch(function () { return []; })]).then(function (res) {
         var r = res[0];
+        // Lọc lại phía máy (an toàn khi máy chủ còn bản cũ chưa hiểu chọn nhiều)
+        var stOk = {}, pcOk = {};
+        d.statuses.forEach(function (x) { stOk[x] = true; }); d.panelCodes.forEach(function (x) { pcOk[x] = true; });
+        var kept = r.rows.filter(function (o) {
+          return (!d.statuses.length || stOk[o.Status]) && (!d.panelCodes.length || String(o.PanelCodes).split(',').some(function (c) { return pcOk[c.trim()]; }));
+        });
+        if (kept.length !== r.rows.length) { r.total = kept.length; r.rows = kept; }
         if (!r.rows.length) { U.$('#s-result', view).innerHTML = U.empty('Không có phiếu phù hợp'); return; }
         var money = r.rows[0].NetAmount !== null;
         U.$('#s-result', view).innerHTML = '<div class="card-header justify-content-between"><span>' + r.total + ' phiếu</span>' +
@@ -897,7 +909,7 @@
         if (ab) anyAbn = true;
         var mark = r.Flag === 'H' ? ' ↑' : (r.Flag === 'L' ? ' ↓' : '');
         return '<tr><td class="c mu">' + (i + 1) + '</td><td class="tn">' + esc(t.TestName) + '</td><td class="c rv' + (ab ? ' ab' : '') + '">' + esc(r.Value || '') + mark + '</td>' +
-          '<td class="c mu">' + esc(t.Unit || '') + '</td><td class="rf">' + esc(r.RefText || App.refFor(t, o.Gender).text) + '</td></tr>';
+          '<td class="c mu">' + esc(t.Unit || '') + '</td><td class="rf">' + U.ml(App.refText(r.RefText, t, o.Gender)) + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="c mu" style="padding:10px">(Chưa có kết quả)</td></tr>';
       return '<section class="page sz-' + psz.toLowerCase() + '" data-sz="' + psz + '">' +
         '<header><div class="logo">' + (logo ? '<img src="' + esc(logo) + '" alt="">' : '') + '</div><div class="org">' +
@@ -1035,7 +1047,7 @@
     var m = U.modal('<div class="modal-header"><h5 class="modal-title">' + esc(t.TestName) + ' <span class="text-muted small">' + esc(t.Unit || '') + '</span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>' +
       '<div class="modal-body">' + (numeric.length >= 1 ? '<canvas id="hc" height="120"></canvas>' : '') +
       '<table class="table table-sm mt-3"><thead><tr><th>Ngày</th><th>Mã phiếu</th><th>Kết quả</th><th>Tham chiếu</th></tr></thead><tbody>' +
-      t.points.slice().reverse().map(function (p) { return '<tr><td>' + U.vnDate(p.OrderDate) + '</td><td><a href="#/order/' + p.OrderID + '" data-bs-dismiss="modal" class="mono">' + p.OrderID + '</a></td><td class="flag-' + (p.Flag || '') + '">' + esc(p.Value) + ' ' + (p.Flag && p.Flag !== 'N' ? U.flagLabel(p.Flag) : '') + '</td><td class="small">' + esc(p.RefText || '') + '</td></tr>'; }).join('') +
+      t.points.slice().reverse().map(function (p) { return '<tr><td>' + U.vnDate(p.OrderDate) + '</td><td><a href="#/order/' + p.OrderID + '" data-bs-dismiss="modal" class="mono">' + p.OrderID + '</a></td><td class="flag-' + (p.Flag || '') + '">' + esc(p.Value) + ' ' + (p.Flag && p.Flag !== 'N' ? U.flagLabel(p.Flag) : '') + '</td><td class="small">' + U.ml(p.RefText || '') + '</td></tr>'; }).join('') +
       '</tbody></table></div>', { size: 'lg' });
     if (!numeric.length || !window.Chart) return;
     var ref = { min: tdef.RefMinM, max: tdef.RefMaxM };

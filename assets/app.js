@@ -12,6 +12,8 @@
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
       });
     },
+    /** Chữ nhiều dòng (khoảng tham chiếu…): thoát HTML rồi giữ xuống dòng. */
+    ml: function (s) { return U.esc(s).replace(/\r?\n/g, '<br>'); },
     money: function (n) { return n === null || n === undefined || n === '' ? '—' : Number(n).toLocaleString('vi-VN') + ' đ'; },
     num: function (n) { return n === null || n === undefined || n === '' ? '' : Number(n).toLocaleString('vi-VN'); },
     vnDate: function (s) { if (!s) return ''; var d = String(s).substring(0, 10).split('-'); return d.length === 3 ? d[2] + '/' + d[1] + '/' + d[0] : s; },
@@ -185,7 +187,54 @@
     });
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.1.4';
+  App.FE_VERSION = '2.1.8';
+  /**
+   * Khoảng tham chiếu để in: ưu tiên bản lưu kèm kết quả (đúng tại thời điểm làm XN);
+   * nếu chỉ khác danh mục hiện tại ở chỗ xuống dòng / khoảng trắng → dùng bản danh mục (phiếu cũ in ra cũng xuống dòng đẹp).
+   */
+  App.refText = function (saved, t, gender) {
+    var cur = App.refFor(t, gender).text || '', norm = function (x) { return String(x || '').replace(/\s+/g, ' ').trim(); };
+    return saved && norm(saved) !== norm(cur) ? saved : (cur || saved || '');
+  };
+  /**
+   * Ô chọn nhiều (dropdown có ô tick). options: [{ value, label, short? }], selected: [value].
+   * Không tick gì = "Tất cả". Đọc giá trị: App.msValues(container, name).
+   */
+  App.multiSelect = function (name, options, selected, allLabel) {
+    var sel = {}; (selected || []).forEach(function (v) { sel[v] = true; });
+    return '<div class="dropdown ms-dd" data-ms="' + name + '" data-all="' + U.esc(allLabel || 'Tất cả') + '">' +
+      '<button type="button" class="form-select text-start ms-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"><span class="ms-text"></span></button>' +
+      '<div class="dropdown-menu ms-menu p-1">' +
+        '<div class="d-flex justify-content-between px-2 py-1 small border-bottom mb-1"><a href="#" data-ms-act="all">Chọn tất cả</a><a href="#" data-ms-act="none">Bỏ chọn</a></div>' +
+        options.map(function (o) {
+          return '<label class="dropdown-item d-flex align-items-center gap-2 ms-item"><input type="checkbox" class="form-check-input m-0" value="' + U.esc(o.value) + '" data-short="' + U.esc(o.short || o.label) + '"' + (sel[o.value] ? ' checked' : '') + '>' +
+            '<span>' + U.esc(o.label) + '</span></label>';
+        }).join('') + '</div></div>';
+  };
+  App.msValues = function (root, name) {
+    return Array.prototype.map.call(root.querySelectorAll('[data-ms="' + name + '"] input:checked'), function (i) { return i.value; });
+  };
+  /** Gắn sự kiện cho mọi ô chọn nhiều trong root; onChange(name, values) khi đổi. */
+  App.bindMultiSelect = function (root, onChange) {
+    var paint = function (dd) {
+      var on = dd.querySelectorAll('input:checked'), all = dd.querySelectorAll('input').length;
+      var shorts = Array.prototype.map.call(on, function (i) { return i.getAttribute('data-short'); });
+      dd.querySelector('.ms-text').textContent = !on.length || on.length === all ? dd.getAttribute('data-all') : (on.length <= 2 ? shorts.join(', ') : on.length + ' đã chọn');
+      dd.querySelector('.ms-btn').classList.toggle('ms-active', on.length > 0 && on.length < all);
+    };
+    Array.prototype.forEach.call(root.querySelectorAll('.ms-dd'), function (dd) {
+      paint(dd);
+      dd.addEventListener('change', function () { paint(dd); if (onChange) onChange(dd.getAttribute('data-ms'), App.msValues(root, dd.getAttribute('data-ms'))); });
+      dd.addEventListener('click', function (e) {
+        var a = e.target.closest('[data-ms-act]');
+        if (!a) return;
+        e.preventDefault();
+        var on = a.getAttribute('data-ms-act') === 'all';
+        Array.prototype.forEach.call(dd.querySelectorAll('input'), function (i) { i.checked = on; });
+        dd.dispatchEvent(new Event('change'));
+      });
+    });
+  };
   /** Mở 1 màn hình của ứng dụng ở tab mới, giữ nguyên phiên đăng nhập (không phải đăng nhập lại). */
   App.openTab = function (hash) {
     try { localStorage.setItem('lis_handoff', JSON.stringify({ t: Api.getToken(), at: Date.now() })); } catch (e) { /* ignore */ }

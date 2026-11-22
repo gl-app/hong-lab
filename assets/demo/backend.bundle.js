@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.1.3',
+  VERSION: '2.1.8',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -630,30 +630,38 @@ var Db = (function () {
   }
 
   /** Create a table sheet with header + plain-text formatting (giữ số 0 đầu SĐT, ngày dạng text). */
+  /**
+   * Tạo sheet / thêm cột còn thiếu theo SCHEMA.
+   * Sheet đã đủ cột → chỉ 2 lệnh đọc, KHÔNG định dạng lại (định dạng lại cả sheet hàng chục nghìn dòng mỗi lần setup rất chậm).
+   * Chỉ định dạng: sheet mới (toàn bộ) hoặc đúng các cột vừa thêm.
+   */
   function ensureSheet_(ss, table) {
     var cols = SCHEMA[table];
-    var isNew = !ss.getSheetByName(table);
-    var sh = isNew ? ss.insertSheet(table) : ss.getSheetByName(table);
-    var current = sh.getLastColumn() > 0 ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
+    var sh = ss.getSheetByName(table), isNew = !sh;
+    if (isNew) sh = ss.insertSheet(table);
+    var lastCol = sh.getLastColumn();
+    var current = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
     var missing = cols.filter(function (c) { return current.indexOf(c) === -1; });
+    if (!isNew && !missing.length) return sh;                       // đã chuẩn → không đụng tới
+    var numeric = ['Price', 'GrossAmount', 'Discount', 'NetAmount', 'Amount', 'NumValue', 'Age', 'BirthYear',
+                   'Version', 'SortOrder', 'LastValue', 'FollowUpDays', 'PrintCount', 'Year',
+                   'RefMinM', 'RefMaxM', 'RefMinF', 'RefMaxF'];
+    var start = current.filter(String).length + 1;
     if (missing.length) {
-      var start = current.filter(String).length + 1;
       var need = start + missing.length - 1;
       if (sh.getMaxColumns() < need) sh.insertColumnsAfter(sh.getMaxColumns(), need - sh.getMaxColumns());   // sheet đã cắt gọn cột
       sh.getRange(1, start, 1, missing.length).setValues([missing]);
       if (!isNew) forgetHeader_(sh);
     }
-    var width = Math.max(sh.getLastColumn(), cols.length);
-    sh.getRange(1, 1, 1, width).setFontWeight('bold').setBackground('#0f4c5c').setFontColor('#ffffff');
-    sh.setFrozenRows(1);
-    // Plain text for everything, then numeric columns back to number format.
-    sh.getRange(1, 1, sh.getMaxRows(), width).setNumberFormat('@');
-    var numeric = ['Price', 'GrossAmount', 'Discount', 'NetAmount', 'Amount', 'NumValue', 'Age', 'BirthYear',
-                   'Version', 'SortOrder', 'LastValue', 'FollowUpDays', 'PrintCount', 'Year',
-                   'RefMinM', 'RefMaxM', 'RefMinF', 'RefMaxF'];
-    var header = sh.getRange(1, 1, 1, width).getValues()[0];
+    var maxRows = sh.getMaxRows();
+    var from = isNew ? 1 : start, width = isNew ? Math.max(sh.getLastColumn(), cols.length) : missing.length;
+    sh.getRange(1, from, 1, width).setFontWeight('bold').setBackground('#0f4c5c').setFontColor('#ffffff');
+    if (isNew) sh.setFrozenRows(1);
+    // Chữ thuần cho cột mới (giữ số 0 đầu SĐT, ngày không lệch múi giờ), cột số trả về General
+    sh.getRange(1, from, maxRows, width).setNumberFormat('@');
+    var header = isNew ? sh.getRange(1, 1, 1, width).getValues()[0] : missing;
     header.forEach(function (h, i) {
-      if (numeric.indexOf(h) > -1) sh.getRange(2, i + 1, sh.getMaxRows() - 1, 1).setNumberFormat('General');
+      if (numeric.indexOf(h) > -1 && maxRows > 1) sh.getRange(2, from + i, maxRows - 1, 1).setNumberFormat('General');
     });
     if (isNew) trimSheet_(sh, ROW_BUFFER);   // bảng mới: bỏ cột/dòng trống mặc định (26 cột × 1000 dòng)
     return sh;
@@ -1301,13 +1309,45 @@ var Sequence = {
   }
 };
 var Ids = {
-  /** BN-000001 */
-  newPatientId: function () { return 'BN-' + pad_(Sequence.next('BN'), 6); },
-  /** XN-YYMMDD-NNN */
+  /**
+   * BN-000001. Luôn kiểm tra mã chưa tồn tại trong Patients trước khi trả về.
+   * Bộ đếm bị lùi (VD ScriptProperties bị xóa / dự án Apps Script mới / nhập dữ liệu cũ sau) → tự nhảy tới số lớn nhất + 1.
+   * Gọi trong withLock_.
+   */
+  newPatientId: function () {
+    for (var i = 0; i < 3; i++) {
+      var id = 'BN-' + pad_(Sequence.next('BN'), 6);
+      if (!Db.findRowNums(T.PATIENTS, null, 'PatientID', id).length) return id;
+      var max = 0;
+      Db.readColumns(T.PATIENTS, null, ['PatientID'], true).forEach(function (r) {
+        var m = String(r.PatientID).match(/^BN-(\d+)$/);
+        if (m) max = Math.max(max, Number(m[1]));
+      });
+      console.warn('Bộ đếm BN bị lùi (' + id + ' đã tồn tại) → đặt lại theo số lớn nhất ' + max);
+      Sequence.ensureAtLeast('BN', max);
+    }
+    throw new AppError('SERVER_ERROR', 'Không cấp được mã bệnh nhân mới – liên hệ quản trị.');
+  },
+  /** XN-YYMMDD-NNN. Kiểm tra mã chưa có trong các DB chứa ngày đó; trùng → nhảy tới số lớn nhất của ngày + 1. */
   newOrderId: function (orderDate) {
     var d = toDateStr_(orderDate) || todayStr_();
-    var ymd = d.substring(2, 4) + d.substring(5, 7) + d.substring(8, 10);
-    return 'XN-' + ymd + '-' + pad_(Sequence.next('XN-' + ymd), 3);
+    var ymd = d.substring(2, 4) + d.substring(5, 7) + d.substring(8, 10), key = 'XN-' + ymd;
+    var dbs = YearDb.idsInRange(d, d);
+    for (var i = 0; i < 3; i++) {
+      var id = key + '-' + pad_(Sequence.next(key), 3);
+      var taken = dbs.some(function (db) { return Db.findRowNums(T.ORDERS, db, 'OrderID', id).length > 0; });
+      if (!taken) return id;
+      var max = 0, re = new RegExp('^' + key + '-(\\d+)$');
+      dbs.forEach(function (db) {
+        Db.readColumns(T.ORDERS, db, ['OrderID'], true).forEach(function (r) {
+          var m = String(r.OrderID).match(re);
+          if (m) max = Math.max(max, Number(m[1]));
+        });
+      });
+      console.warn('Bộ đếm ' + key + ' bị lùi (' + id + ' đã tồn tại) → đặt lại theo số lớn nhất ' + max);
+      Sequence.ensureAtLeast(key, max);
+    }
+    throw new AppError('SERVER_ERROR', 'Không cấp được mã phiếu mới – liên hệ quản trị.');
   }
 };
 
@@ -1644,6 +1684,12 @@ var Catalog = {
     var max = female ? test.RefMaxF : test.RefMaxM;
     if (female && min === null && max === null) { min = test.RefMinM; max = test.RefMaxM; }
     return { min: min, max: max, text: test.RefText || '' };
+  },
+
+  /** Khoảng tham chiếu để in (giống App.refText ở giao diện): bản lưu kèm kết quả, trừ khi chỉ khác danh mục ở xuống dòng / khoảng trắng. */
+  refPrint: function (saved, test, gender) {
+    var cur = Catalog.refFor(test, gender).text || '', norm = function (x) { return String(x || '').replace(/\s+/g, ' ').trim(); };
+    return saved && norm(saved) !== norm(cur) ? String(saved) : (cur || String(saved || ''));
   },
 
   /** Compute abnormal flag for a result value. */
@@ -2309,8 +2355,19 @@ var OrderService = {
     return out;
   },
 
-  /** p: { q?, from?, to?, status?, panelCode?, doctor?, payment?, limit? } */
+  /**
+   * p: { q?, from?, to?, status?, panelCode?, statuses?: [], panelCodes?: [], doctor?, payment?, limit? }
+   * statuses / panelCodes: chọn nhiều (khớp BẤT KỲ giá trị nào); status / panelCode: 1 giá trị (tương thích bản cũ).
+   */
   search: function (p, ctx) {
+    var list_ = function (a, one) {
+      var arr = Array.isArray(a) ? a : String(a || '').split(',');
+      arr = arr.map(function (x) { return String(x).trim(); }).filter(String);
+      if (!arr.length && one) arr = [String(one)];
+      var m = {}; arr.forEach(function (x) { m[x] = true; });
+      return arr.length ? m : null;
+    };
+    var stSet = list_(p.statuses, p.status), pcSet = list_(p.panelCodes, p.panelCode);
     var to = toDateStr_(p.to) || todayStr_();
     var from = toDateStr_(p.from) || addDays_(to, -(RangeGuard.num('SEARCH_DEFAULT_DAYS') || 30));
     var limit = Math.min(toNum_(p.limit, 300), 2000);
@@ -2331,9 +2388,9 @@ var OrderService = {
       all.forEach(function (o) {
         var d = toDateStr_(o.OrderDate);
         if (d < from || d > to) return;
-        if (p.status && o.Status !== p.status) return;
+        if (stSet && !stSet[o.Status]) return;
         if (p.payment && o.PaymentStatus !== p.payment) return;
-        if (p.panelCode && String(o.PanelCodes).split(',').indexOf(p.panelCode) === -1) return;
+        if (pcSet && !String(o.PanelCodes).split(',').some(function (c) { return pcSet[c.trim()]; })) return;
         if (p.doctor && o.DoctorName !== p.doctor) return;
         if (q) {
           var hit;
@@ -2961,7 +3018,7 @@ var PrintService = {
     rows.forEach(function (t, i) {
       var rs = resMap[t.TestCode] || {};
       var mark = rs.Flag === 'H' ? ' ↑' : (rs.Flag === 'L' ? ' ↓' : '');
-      grid.push([String(i + 1), t.TestName, (rs.Value || '') + mark, t.Unit || '', rs.RefText || Catalog.refFor(t, o.Gender).text || '']);
+      grid.push([String(i + 1), t.TestName, (rs.Value || '') + mark, t.Unit || '', Catalog.refPrint(rs.RefText, t, o.Gender)]);
     });
     if (!rows.length) grid.push(['', '(Chưa có kết quả)', '', '', '']);
     var tbl = body.appendTable(grid);
@@ -3031,7 +3088,8 @@ var PrintService = {
       var r = resMap[t.TestCode];
       if (onlyResulted && !(r && r.Value !== '')) return;
       n++;
-      if (String((r && r.RefText) || Catalog.refFor(t, data.order.Gender).text || '').length > 16) longRef++;   // khoảng tham chiếu dài → xuống 2 dòng
+      var ref = Catalog.refPrint(r && r.RefText, t, data.order.Gender), lines = ref.split('\n');
+      longRef += lines.length > 1 ? (lines.length - 1) * 2 : (ref.length > 16 ? 1 : 0);   // nhiều dòng / dài → dòng cao hơn
     });
     return n + Math.ceil(longRef / 2);
   },
@@ -3067,7 +3125,7 @@ var PrintService = {
     Object.keys(map).forEach(function (k) { body.replaceText(esc(k), String(map[k] === undefined || map[k] === null ? '' : map[k])); });
     data.results.forEach(function (r) {
       body.replaceText(esc('T:' + r.TestCode), String(r.Value || ''));
-      body.replaceText(esc('R:' + r.TestCode), String(r.RefText || ''));
+      body.replaceText(esc('R:' + r.TestCode), String(r.RefText || '').replace(/\n/g, '; '));   // mẫu Word riêng: 1 dòng
       body.replaceText(esc('F:' + r.TestCode), r.Flag && r.Flag !== 'N' ? r.Flag : '');
     });
     body.replaceText('\\{\\{[TRF]:[A-Z0-9_]+\\}\\}', '');   // clear unfilled tokens
@@ -3511,7 +3569,7 @@ var AdminService = {
       var n = function (v) { var x = toNum_(v); return x === null ? '' : x; };
       var row = {
         TestCode: code, TestName: String(p.TestName).trim(), Unit: p.Unit || '', ResultType: String(p.ResultType).toUpperCase(),
-        RefMinM: n(p.RefMinM), RefMaxM: n(p.RefMaxM), RefMinF: n(p.RefMinF), RefMaxF: n(p.RefMaxF), RefText: p.RefText || '',
+        RefMinM: n(p.RefMinM), RefMaxM: n(p.RefMaxM), RefMinF: n(p.RefMinF), RefMaxF: n(p.RefMaxF), RefText: String(p.RefText || '').replace(/\r\n?/g, '\n').split('\n').map(function (l) { return l.trim(); }).filter(String).join('\n'),
         Price: Auth.hasPerm(ctx, PERM.ADMIN_PRICE) ? toNum_(p.Price, 0) : (cur ? toNum_(cur.Price, 0) : 0),   // giá chỉ đổi khi có quyền Bảng giá
         SortOrder: toNum_(p.SortOrder, 999), IsActive: p.IsActive === undefined ? true : toBool_(p.IsActive),
         LegacyName: p.LegacyName || (cur ? cur.LegacyName : '')
@@ -4232,6 +4290,7 @@ var RangeGuard = {
  */
 
 function setup() {
+  var tStart = Date.now();
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty(PROP.CONFIG_DB_ID)) props.setProperty(PROP.CONFIG_DB_ID, DEFAULT_IDS.CONFIG_DB_ID);
   if (!props.getProperty(PROP.PATIENT_DB_ID)) props.setProperty(PROP.PATIENT_DB_ID, DEFAULT_IDS.PATIENT_DB_ID);
@@ -4333,6 +4392,7 @@ function setup() {
     [T.ORDERS, T.ORDER_PANELS, T.RESULTS, T.AUDIT].forEach(function (t) { Db.ensureSheet(ss, t); });
   });
 
+  console.log('Cấu hình + danh mục + kiểm tra DB đang ghi: ' + Math.round((Date.now() - tStart) / 1000) + ' giây');
   installTriggers();
   var t0 = Date.now();
   try { YearDb.refreshCapacity(); } catch (e) { console.warn('Capacity: ' + e.message); }
@@ -4340,10 +4400,12 @@ function setup() {
   // v2.1: chỉ mục lần khám (dựng 1 lần từ mọi DB năm; sau đó tự cập nhật khi tạo/sửa/hủy phiếu)
   try {
     var t1 = Date.now();
-    var vr = withLock_(function () { return VisitIndex.ready() ? VisitIndex.reconcile() : VisitIndex.rebuild(); });
+    // Đã có chỉ mục → không đối soát ở đây (01:00 tự làm) để setup nhanh; chưa có → dựng 1 lần
+    var vr = VisitIndex.ready() ? 'đã có – bỏ qua (01:00 tự đối soát)' : withLock_(function () { return VisitIndex.rebuild(); });
     console.log('Chỉ mục lần khám: ' + JSON.stringify(vr) + ' – ' + Math.round((Date.now() - t1) / 1000) + ' giây');
   } catch (e) { console.warn('Visits: ' + e.message); }
   SysLog.write('system', 'SETUP', 'System', APP.VERSION, {});
+  console.log('⏱ Tổng: ' + Math.round((Date.now() - tStart) / 1000) + ' giây');
   console.log('✅ Setup hoàn tất. Đăng nhập: admin / Admin@123 (bắt buộc đổi mật khẩu).');
   return healthCheck();
 }
@@ -4423,7 +4485,7 @@ function migrationFinalize() {
     var perDay = {};
     YearDb.all().forEach(function (y) {
       try {
-        Db.readColumns(T.ORDERS, y.SpreadsheetId, ['OrderID']).forEach(function (r) {
+        Db.readColumns(T.ORDERS, y.SpreadsheetId, ['OrderID'], true).forEach(function (r) {
           var m = String(r.OrderID).match(/^XN-(\d{6})-(\d+)$/);
           if (m) perDay[m[1]] = Math.max(perDay[m[1]] || 0, Number(m[2]));
         });
@@ -4441,13 +4503,77 @@ function healthCheck() {
     try { report.push('✔ ' + label + ': ' + fn()); } catch (e) { report.push('✖ ' + label + ': ' + e.message); }
   };
   check('CONFIG DB', function () { return Db.readAll(T.USERS).length + ' users, ' + Db.readAll(T.TESTS).length + ' tests'; });
-  check('PATIENT DB', function () { return Db.readColumns(T.PATIENTS, null, ['PatientID']).length + ' bệnh nhân'; });
+  check('PATIENT DB', function () { return Math.max(0, Db.sheet(T.PATIENTS, null).getLastRow() - 1) + ' bệnh nhân'; });
+  // Chỉ mở file + đếm dòng (1 lệnh / DB) – không đọc dữ liệu, không nạp cache
+  // DB khóa sổ (RO): lấy số phiếu đã đo trong YearDatabases – không mở file (14 DB cũ mở lần lượt rất chậm)
   YearDb.all().forEach(function (y) {
-    check((y.Note || 'DB_' + y.Year) + ' (' + y.Mode + ')', function () { return Db.readColumns(T.ORDERS, y.SpreadsheetId, ['OrderID']).length + ' phiếu'; });
+    check((y.Note || 'DB_' + y.Year) + ' (' + y.Mode + ')', function () {
+      if (y.Mode === DB_MODE.RO && y.OrderRows) return y.OrderRows + ' phiếu (đo lúc ' + String(y.CheckedAt || '').substring(0, 10) + ')';
+      return Math.max(0, Db.sheet(T.ORDERS, y.SpreadsheetId).getLastRow() - 1) + ' phiếu';
+    });
   });
   console.log(report.join('\n'));
   return report;
 }
+
+/**
+ * SỬA MÃ BỆNH NHÂN BỊ TRÙNG (do bộ đếm BN bị lùi – lỗi trước v2.1.6).
+ *  - Chạy KHÔNG tham số = xem trước (không ghi gì): Nhật ký thực thi liệt kê từng hồ sơ trùng + phiếu sẽ chuyển.
+ *  - Kiểm tra đúng rồi chạy  repairDuplicatePatientIdsApply  để sửa thật.
+ *  Quy tắc: trong mỗi nhóm trùng mã, hồ sơ cũ nhất (dòng trên cùng) giữ mã; hồ sơ tạo sau được cấp mã mới.
+ *  Phiếu ở DB đang ghi có mã trùng, tạo từ lúc hồ sơ mới được tạo trở đi VÀ do cùng người tạo hồ sơ đó → chuyển sang hồ sơ mới
+ *  (cập nhật Mã BN + họ tên, giới, tuổi, SĐT, địa chỉ trên phiếu và Mã BN trong kết quả).
+ */
+function repairDuplicatePatientIds(apply) {
+  apply = apply === true;
+  return withLock_(function () {
+    var groups = {}, out = [];
+    Db.readAll(T.PATIENTS).forEach(function (p) { (groups[p.PatientID] = groups[p.PatientID] || []).push(p); });
+    var live = YearDb.all().filter(function (y) { return y.Mode !== DB_MODE.RO; });
+    Object.keys(groups).forEach(function (id) {
+      var rows = groups[id];
+      if (rows.length < 2) return;
+      rows.sort(function (a, b) { return a._row - b._row; });
+      var keep = rows[0];
+      rows.slice(1).forEach(function (np) {
+        var since = String(np.CreatedAt || '');
+        var moves = [];
+        live.forEach(function (y) {
+          Db.findBy(T.ORDERS, y.SpreadsheetId, 'PatientID', id).forEach(function (o) {
+            // phiếu tạo từ lúc hồ sơ mới ra đời, bởi đúng người đã tạo hồ sơ đó (thường là lễ tân vừa nhập)
+            if (String(o.CreatedAt || '') >= since && (!np.CreatedBy || o.CreatedBy === np.CreatedBy)) moves.push({ db: y.SpreadsheetId, order: o });
+          });
+        });
+        var newId = apply ? Ids.newPatientId() : '(mã mới)';
+        out.push('Mã ' + id + ': giữ "' + keep.FullName + '" (dòng ' + keep._row + ') · "' + np.FullName + '" (dòng ' + np._row + ', tạo ' + since + ' bởi ' + np.CreatedBy + ') → ' + newId +
+                 ' · chuyển ' + moves.length + ' phiếu: ' + moves.map(function (m) { return m.order.OrderID; }).join(', '));
+        if (!apply) return;
+        Db.updateRow(T.PATIENTS, null, np._row, { PatientID: newId, VisitLog: '', UpdatedAt: nowIso_(), UpdatedBy: 'repair' });
+        moves.forEach(function (m) {
+          var o = m.order, yr = Number(String(toDateStr_(o.OrderDate)).substring(0, 4));
+          Db.updateRow(T.ORDERS, m.db, o._row, {
+            PatientID: newId, PatientName: np.FullName, Gender: np.Gender,
+            Age: np.BirthYear ? yr - Number(np.BirthYear) : o.Age, Phone: np.Phone,
+            Address: [np.Address, np.Ward, np.Province].filter(String).join(', '),
+            UpdatedAt: nowIso_(), UpdatedBy: 'repair', Version: Number(o.Version || 1) + 1
+          });
+          var res = Db.findBy(T.RESULTS, m.db, 'OrderID', o.OrderID);
+          if (res.length) Db.updateRows(T.RESULTS, m.db, res.map(function (r) { return { row: r._row, patch: { PatientID: newId } }; }));
+          Audit.write({ username: 'repair' }, m.db, 'ORDER_UPDATE', 'Order', o.OrderID, { PatientID: [id, newId], PatientName: [o.PatientName, np.FullName], reason: 'Sửa mã BN trùng' });
+        });
+        SysLog.write('repair', 'PATIENT_ID_FIX', 'Patient', newId, { from: id, name: np.FullName, orders: moves.map(function (m) { return m.order.OrderID; }) });
+      });
+    });
+    if (apply && out.length) {
+      CacheUtil.remove(PatientService.INDEX_KEY);
+      AdminService.clearCache();
+      try { VisitIndex.reconcile(); } catch (e) { console.warn('Visits: ' + e.message); }
+    }
+    console.log(out.length ? (apply ? 'ĐÃ SỬA:\n' : 'XEM TRƯỚC (chưa ghi gì):\n') + out.join('\n') : 'Không có mã bệnh nhân trùng.');
+    return out;
+  });
+}
+function repairDuplicatePatientIdsApply() { return repairDuplicatePatientIds(true); }
 
 /* ---- 91_SeedCatalog.gs ---- */
 /**

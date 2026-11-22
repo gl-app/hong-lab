@@ -734,7 +734,7 @@
         cat.tests.slice().sort(function (a, b) { return a.SortOrder - b.SortOrder; }).map(function (t) {
           var rg = function (a, b) { return (a === null ? '' : a) + (a !== null || b !== null ? ' – ' : '') + (b === null ? '' : b); };
           return '<tr data-tedit="' + t.TestCode + '"><td class="mono small">' + t.TestCode + '</td><td>' + esc(t.TestName) + '</td><td class="small">' + t.ResultType + '</td><td class="small">' + esc(t.Unit || '') + '</td>' +
-            '<td class="small tabular">' + rg(t.RefMinM, t.RefMaxM) + '</td><td class="small tabular">' + rg(t.RefMinF, t.RefMaxF) + '</td><td class="small">' + esc(t.RefText || '') + '</td>' +
+            '<td class="small tabular">' + rg(t.RefMinM, t.RefMaxM) + '</td><td class="small tabular">' + rg(t.RefMinF, t.RefMaxF) + '</td><td class="small">' + U.ml(t.RefText || '') + '</td>' +
             '<td class="text-end tabular">' + U.num(t.Price) + '</td><td>' + (t.IsActive ? '' : '<span class="small text-muted">ẩn</span>') + '</td></tr>';
         }).join('') + '</tbody></table></div></div></div></div>';
       renderPanel();
@@ -790,7 +790,8 @@
         '<div class="col-3"><label class="form-label">Nam – Max</label><input class="form-control" name="RefMaxM" value="' + esc(v(t.RefMaxM)) + '"></div>' +
         '<div class="col-3"><label class="form-label">Nữ – Min</label><input class="form-control" name="RefMinF" value="' + esc(v(t.RefMinF)) + '"></div>' +
         '<div class="col-3"><label class="form-label">Nữ – Max</label><input class="form-control" name="RefMaxF" value="' + esc(v(t.RefMaxF)) + '"></div>' +
-        '<div class="col-8"><label class="form-label">Khoảng tham chiếu hiển thị trên phiếu</label><input class="form-control" name="RefText" value="' + esc(v(t.RefText)) + '"></div>' +
+        '<div class="col-8"><label class="form-label">Khoảng tham chiếu hiển thị trên phiếu <span class="text-muted fw-normal small">· Enter để xuống dòng</span></label>' +
+          '<textarea class="form-control" name="RefText" rows="2" placeholder="VD:&#10;Nam ≤ 42&#10;Nữ ≤ 32 U/L/37°C">' + esc(v(t.RefText)) + '</textarea></div>' +
         '<div class="col-2"><label class="form-label">Thứ tự</label><input class="form-control" name="SortOrder" value="' + esc(v(t.SortOrder)) + '"></div>' +
         '<div class="col-2 d-flex align-items-end"><div class="form-check"><input class="form-check-input" type="checkbox" name="IsActive" id="t-act"' + (t.IsActive ? ' checked' : '') + '><label class="form-check-label" for="t-act">Dùng</label></div></div>' +
         '</form><div class="small text-muted mt-2">Ngưỡng dùng để gắn cờ ↑/↓ tự động. Bỏ trống Nữ = dùng ngưỡng Nam.</div></div><div class="modal-footer"><button class="btn btn-primary" id="t-save">Lưu</button></div>', { size: 'lg' });
