@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.1.8',
+  VERSION: '2.1.9',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -1686,10 +1686,14 @@ var Catalog = {
     return { min: min, max: max, text: test.RefText || '' };
   },
 
-  /** Khoảng tham chiếu để in (giống App.refText ở giao diện): bản lưu kèm kết quả, trừ khi chỉ khác danh mục ở xuống dòng / khoảng trắng. */
+  /**
+   * Khoảng tham chiếu để in (giống App.refText ở giao diện): mặc định bản danh mục hiện tại;
+   * chỉ giữ bản lưu kèm kết quả khi các con số khác (ngưỡng đã đổi sau khi làm XN).
+   */
   refPrint: function (saved, test, gender) {
-    var cur = Catalog.refFor(test, gender).text || '', norm = function (x) { return String(x || '').replace(/\s+/g, ' ').trim(); };
-    return saved && norm(saved) !== norm(cur) ? String(saved) : (cur || String(saved || ''));
+    var cur = Catalog.refFor(test, gender).text || '';
+    var nums = function (x) { return (String(x || '').replace(/,/g, '.').match(/\d+(\.\d+)?/g) || []).map(Number).join('|'); };
+    return saved && nums(saved) !== nums(cur) ? String(saved) : (cur || String(saved || ''));
   },
 
   /** Compute abnormal flag for a result value. */

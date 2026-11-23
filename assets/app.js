@@ -13,7 +13,7 @@
       });
     },
     /** Chữ nhiều dòng (khoảng tham chiếu…): thoát HTML rồi giữ xuống dòng. */
-    ml: function (s) { return U.esc(s).replace(/\r?\n/g, '<br>'); },
+    ml: function (s) { return U.esc(s).replace(/ {2,}/g, function (m) { return m.replace(/ /g, '&nbsp;'); }).replace(/\r?\n/g, '<br>'); },
     money: function (n) { return n === null || n === undefined || n === '' ? '—' : Number(n).toLocaleString('vi-VN') + ' đ'; },
     num: function (n) { return n === null || n === undefined || n === '' ? '' : Number(n).toLocaleString('vi-VN'); },
     vnDate: function (s) { if (!s) return ''; var d = String(s).substring(0, 10).split('-'); return d.length === 3 ? d[2] + '/' + d[1] + '/' + d[0] : s; },
@@ -187,14 +187,15 @@
     });
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.1.8';
+  App.FE_VERSION = '2.1.9';
   /**
-   * Khoảng tham chiếu để in: ưu tiên bản lưu kèm kết quả (đúng tại thời điểm làm XN);
-   * nếu chỉ khác danh mục hiện tại ở chỗ xuống dòng / khoảng trắng → dùng bản danh mục (phiếu cũ in ra cũng xuống dòng đẹp).
+   * Khoảng tham chiếu để in: mặc định dùng bản danh mục hiện tại (đã chỉnh xuống dòng, đơn vị…).
+   * Chỉ giữ bản lưu kèm kết quả khi CÁC CON SỐ khác nhau (ngưỡng đã đổi sau khi làm XN → in đúng ngưỡng lúc đó).
    */
   App.refText = function (saved, t, gender) {
-    var cur = App.refFor(t, gender).text || '', norm = function (x) { return String(x || '').replace(/\s+/g, ' ').trim(); };
-    return saved && norm(saved) !== norm(cur) ? saved : (cur || saved || '');
+    var cur = App.refFor(t, gender).text || '';
+    var nums = function (x) { return (String(x || '').replace(/,/g, '.').match(/\d+(\.\d+)?/g) || []).map(Number).join('|'); };
+    return saved && nums(saved) !== nums(cur) ? saved : (cur || saved || '');
   };
   /**
    * Ô chọn nhiều (dropdown có ô tick). options: [{ value, label, short? }], selected: [value].
