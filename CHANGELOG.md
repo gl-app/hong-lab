@@ -4,6 +4,15 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.0 (2026-11-26) — Ngắt kết nối DB năm + tối ưu đọc/ghi
+- Quản trị → Kết nối dữ liệu năm: nút **Ngắt kết nối** cho DB các năm trước (trạng thái mới "Ngắt kết nối"). DB đã ngắt không bao giờ bị mở: tra cứu, lịch sử chỉ số, thống kê, chỉ mục lần khám, setup, đo dung lượng đều bỏ qua. File và dữ liệu giữ nguyên; **Kết nối lại** (về Khóa sổ) là dùng ngay, không cần dựng lại chỉ mục.
+  - Lần khám cũ vẫn giữ trong hồ sơ BN → tính tái khám (chiết khấu) vẫn đúng.
+  - Tra cứu khoảng ngày có năm đã ngắt: dòng gợi ý báo "bỏ qua DB_xxxx (đã ngắt)". Mở phiếu của năm đã ngắt: báo rõ cần kết nối lại.
+  - Không cho ngắt DB năm nay / năm sau (còn nhận phiếu); tạo phiếu lùi ngày vào năm đã ngắt bị chặn (không tự tạo DB mới chồng lên).
+- Giao diện gom các lệnh đọc gọi cùng lúc thành 1 request (VD mở Quản trị → Kết nối dữ liệu năm: 2 lần chờ → 1).
+- Máy chủ: lưu kết quả / hủy phiếu / đăng nhập bớt 1–2 lệnh Google Sheets (ghi đè dòng vừa đọc trong khóa, không đọc lại); BN mới tạo xong lập phiếu ngay không phải tìm lại dòng hồ sơ; lịch sử chỉ số đọc theo khối lớn hơn.
+- Cần dán `LIS_Code.gs` + Deploy → New version. Không cần chạy `setup`.
+
 ## v2.2.3 (2026-11-26) — Phiếu chừa trống gọn 1 trang + xuất PDF nhanh hơn
 - Phiếu có "Chừa trống cho máy XN": thu gọn khoảng cách (lề 5 mm, đầu phiếu 1 hàng: logo | phòng XN | thông tin BN, đệm dòng tối thiểu, chân phiếu 2 cột ghi chú | chữ ký). Vùng trống bắt đầu ~32 mm từ mép giấy như mẫu Word; tới ~20 chỉ số vẫn 1 trang A4.
 - Xuất PDF: gộp định dạng mỗi ô bảng thành 1 lệnh, bỏ các lệnh thay token khi phiếu không dùng mẫu riêng → số lệnh Google Docs giảm ~78% (1.309 → 291 với 17 chỉ số). Logo/hình chìm được cache 6 giờ (không tải lại Drive mỗi lần in).

@@ -185,9 +185,11 @@
       if (r.Mode === 'RW' || !r.MinDate || !r.MaxDate) return true;
       return !((from && r.MaxDate < from) || (to && r.MinDate > to));
     });
-    return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
+    var off = (App.state.yearsOff || []).filter(function (r) { return r.Year >= a && r.Year <= b; });
+    return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }),
+             off: off.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.2.3';
+  App.FE_VERSION = '2.3.0';
   /**
    * Khoảng tham chiếu để in: mặc định dùng bản danh mục hiện tại (đã chỉnh xuống dòng, đơn vị…).
    * Chỉ giữ bản lưu kèm kết quả khi CÁC CON SỐ khác nhau (ngưỡng đã đổi sau khi làm XN → in đúng ngưỡng lúc đó).
@@ -254,6 +256,7 @@
     var s = App.dbScope(from, to), over = max > 0 && days > max;
     return { ok: !over, html: '<span class="' + (over ? 'text-danger' : 'text-muted') + '"><i class="bi bi-database"></i> ' + U.num(days) + ' ngày · đọc ' + s.dbs + '/' + s.total + ' DB' +
       (s.names.length ? ' <span class="opacity-75">(' + U.esc(s.names.join(', ')) + ')</span>' : '') +
+      (s.off.length ? ' <span class="text-warning" title="DB đang ngắt kết nối (Quản trị → Kết nối dữ liệu năm) – phiếu trong các DB này không hiện trong kết quả"><i class="bi bi-plug"></i> bỏ qua ' + U.esc(s.off.join(', ')) + ' (đã ngắt)</span>' : '') +
       (over ? ' — vượt giới hạn ' + U.num(max) + ' ngày, hãy thu hẹp khoảng ngày' : '') + '</span>' };
   };
   /** Gắn gợi ý phạm vi vào 2 ô ngày; trả hàm kiểm tra trước khi gửi (false = đang vượt giới hạn). */

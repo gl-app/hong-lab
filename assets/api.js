@@ -30,9 +30,9 @@
 
   function initDemo() {
     if (demoReady) return demoReady;
-    demoReady = loadScript('assets/gas-shim.js?v=2.2.3')
-      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.2.3'); })
-      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.2.3'); })
+    demoReady = loadScript('assets/gas-shim.js?v=2.3.0')
+      .then(function () { return loadScript('assets/demo/backend.bundle.js?v=2.3.0'); })
+      .then(function () { return loadScript('assets/demo/demo-seed.js?v=2.3.0'); })
       .then(function () {
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch (e) { saved = null; }
@@ -49,7 +49,41 @@
   function ApiError(code, message) { this.code = code; this.message = message; }
   ApiError.prototype = Object.create(Error.prototype);
 
+  /**
+   * Gom lệnh ĐỌC gọi cùng lúc (VD Promise.all khi mở 1 màn hình) thành 1 request sys.batch.
+   * Mỗi request tới Apps Script tốn ~0,5–1,5 giây chỉ để khởi động → 3 lệnh đọc song song = 1 lần chờ thay vì 3.
+   * Lệnh ghi luôn gửi riêng (giữ cơ chế chống gửi trùng của máy chủ).
+   */
+  var BATCHABLE = /^(catalog\.get|order\.get|order\.search|order\.audit|patient\.(get|search|index)|history\.byPatient|followup\.list|report\.(revenue|productivity)|work\.(summary|list)|audit\.list|admin\.[a-z]+\.(list|status|limits)|admin\.settings\.get)$/;
+  var queue = [];
   function call(action, payload) {
+    if (isDemo || !BATCHABLE.test(action) || (action === 'admin.years.limits' && payload && payload.orders !== undefined)) return callNow(action, payload);
+    return new Promise(function (resolve, reject) {
+      queue.push({ action: action, payload: payload || {}, resolve: resolve, reject: reject });
+      if (queue.length === 1) setTimeout(flush, 0);
+    });
+  }
+  function flush() {
+    var items = queue; queue = [];
+    while (items.length) {
+      var part = items.splice(0, 10);   // máy chủ nhận tối đa 10 lệnh / batch
+      if (part.length === 1) { var one = part[0]; callNow(one.action, one.payload).then(one.resolve, one.reject); continue; }
+      (function (part) {
+        send('sys.batch', { calls: part.map(function (it) { return { action: it.action, payload: it.payload }; }) }).then(function (res) {
+          part.forEach(function (it, i) {
+            try { it.resolve(finish(it.action, res.ok ? (res.data[i] || { ok: false, error: { code: 'ERROR', message: 'Thiếu kết quả' } }) : res)); }
+            catch (e) { it.reject(e); }
+          });
+        }, function (e) { part.forEach(function (it) { it.reject(e); }); });
+      })(part);
+    }
+  }
+
+  function callNow(action, payload) {
+    return send(action, payload).then(function (res) { return finish(action, res); });
+  }
+
+  function send(action, payload) {
     // Giả lập lỗi mạng – CHỈ dùng cho kiểm thử tự động (window.__LIS_FAULT__ = 'network')
     if (global.__LIS_FAULT__ === 'network') return Promise.reject(new ApiError('NETWORK', 'Không kết nối được máy chủ. Kiểm tra mạng.'));
     var body = JSON.stringify({ action: action, token: token, payload: payload || {}, reqId: Date.now().toString(36) });
@@ -59,7 +93,7 @@
         return new Promise(function (resolve) {
           setTimeout(function () {   // yield to UI, emulate latency
             var out = JSON.parse(global.doPost({ postData: { contents: body } }).getContent());
-            if (out.ok && !/^(sys\.|catalog\.get|order\.get|order\.search|patient\.search|patient\.get|history\.|followup\.list|report\.|audit\.|admin\.[a-z]+\.list|admin\.settings\.get)/.test(action)) persistDemo();
+            if (out.ok && !/^(sys\.|catalog\.get|order\.get|order\.search|patient\.search|patient\.get|history\.byPatient|followup\.list|report\.|audit\.|admin\.[a-z]+\.list|admin\.settings\.get)/.test(action)) persistDemo();
             resolve(out);
           }, 60);
         });
@@ -78,15 +112,17 @@
         throw new ApiError('NETWORK', e.name === 'AbortError' ? 'Quá thời gian chờ máy chủ.' : 'Không kết nối được máy chủ. Kiểm tra mạng.');
       }).finally(function () { if (timer) clearTimeout(timer); });
     }
-    return p.then(function (res) {
-      if (!res.ok) {
-        if (res.error && res.error.code === 'UNAUTHORIZED') { setToken(null); global.dispatchEvent(new CustomEvent('lis:unauthorized')); }
-        throw new ApiError(res.error ? res.error.code : 'ERROR', res.error ? res.error.message : 'Lỗi không xác định');
-      }
-      // Mọi câu trả lời có dữ liệu phiếu → cập nhật bộ nhớ trên máy (sync.js)
-      if (typeof global.LisOnData === 'function') { try { global.LisOnData(action, res.data); } catch (e) { /* bỏ qua */ } }
-      return res.data;
-    });
+    return p;
+  }
+
+  function finish(action, res) {
+    if (!res.ok) {
+      if (res.error && res.error.code === 'UNAUTHORIZED') { setToken(null); global.dispatchEvent(new CustomEvent('lis:unauthorized')); }
+      throw new ApiError(res.error ? res.error.code : 'ERROR', res.error ? res.error.message : 'Lỗi không xác định');
+    }
+    // Mọi câu trả lời có dữ liệu phiếu → cập nhật bộ nhớ trên máy (sync.js)
+    if (typeof global.LisOnData === 'function') { try { global.LisOnData(action, res.data); } catch (e) { /* bỏ qua */ } }
+    return res.data;
   }
 
   function setToken(t) {

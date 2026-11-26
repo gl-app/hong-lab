@@ -879,7 +879,8 @@
   }
 
   function years(body) {
-    var modeLabel = { RW: '<span class="st st-COMPLETED">Đang ghi</span>', FULL: '<span class="st st-IN_PROGRESS">Đầy – chỉ sửa</span>', RO: '<span class="st st-UNPAID">Khóa sổ</span>' };
+    var modeLabel = { RW: '<span class="st st-COMPLETED">Đang ghi</span>', FULL: '<span class="st st-IN_PROGRESS">Đầy – chỉ sửa</span>', RO: '<span class="st st-UNPAID">Khóa sổ</span>',
+      OFF: '<span class="st st-off" title="Không quét khi tra cứu, lịch sử chỉ số, thống kê. File & dữ liệu giữ nguyên."><i class="bi bi-plug"></i> Ngắt kết nối</span>' };
     function bar(pct) {
       var c = pct >= 85 ? 'var(--danger)' : (pct >= 70 ? 'var(--warn)' : 'var(--brand)');
       return '<div class="d-flex align-items-center gap-2" style="min-width:150px"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" style="width:' + Math.min(100, pct) + '%;background:' + c + '"></div></div>' +
@@ -900,11 +901,15 @@
         '<button class="btn btn-sm btn-primary" id="y-create"><i class="bi bi-plus-lg"></i> Tạo DB mới</button></div></div>' +
         '<div class="table-wrap"><table class="table"><thead><tr><th>Năm</th><th>Tên</th><th>Trạng thái</th><th>Dung lượng (10 triệu ô)</th><th>Số dòng / ngưỡng</th><th title="Ngày khám sớm nhất – muộn nhất có trong DB. Tra cứu/thống kê ngoài khoảng này không phải đọc DB đó">Khoảng ngày</th><th>Đo lúc</th><th></th></tr></thead><tbody>' +
         list.map(function (y) {
-          return '<tr><td class="fw-bold">' + y.Year + '</td><td><a class="small" href="https://docs.google.com/spreadsheets/d/' + esc(y.SpreadsheetId) + '" target="_blank" rel="noopener">' + esc(y.Note || y.SpreadsheetId.substring(0, 12)) + ' <i class="bi bi-box-arrow-up-right"></i></a></td>' +
+          var off = y.Mode === 'OFF';
+          var tog = y.Year < thisYear ? (off
+            ? '<button class="btn btn-sm btn-outline-primary" data-yon="' + esc(y.SpreadsheetId) + '" title="Kết nối lại (chế độ Khóa sổ – chỉ đọc)" aria-label="Kết nối lại"><i class="bi bi-plug-fill"></i></button>'
+            : '<button class="btn btn-sm btn-light" data-yoff="' + esc(y.SpreadsheetId) + '" title="Ngắt kết nối: tra cứu / lịch sử / thống kê không đọc DB này nữa" aria-label="Ngắt kết nối"><i class="bi bi-plug"></i></button>') : '';
+          return '<tr' + (off ? ' class="row-off"' : '') + '><td class="fw-bold">' + y.Year + '</td><td><a class="small" href="https://docs.google.com/spreadsheets/d/' + esc(y.SpreadsheetId) + '" target="_blank" rel="noopener">' + esc(y.Note || y.SpreadsheetId.substring(0, 12)) + ' <i class="bi bi-box-arrow-up-right"></i></a></td>' +
             '<td>' + (modeLabel[y.Mode] || esc(y.Mode)) + '</td><td>' + bar(y.UsedPercent || 0) + '<div class="small text-muted tabular">' + U.num(y.UsedCells) + ' ô</div></td>' +
             '<td>' + rowsLine('Phiếu', y.OrderRows || 0, lim.orders) + rowsLine('Kết quả', y.ResultRows || 0, lim.results) + '</td>' +
             '<td class="small tabular">' + (y.MinDate ? U.vnDate(y.MinDate) + '<br>→ ' + (y.Mode === 'RW' ? '<span class="text-muted">đang ghi</span>' : U.vnDate(y.MaxDate)) : '<span class="text-muted">–</span>') + '</td>' +
-            '<td class="small text-muted">' + U.vnDateTime(y.CheckedAt) + '</td><td><button class="btn btn-sm btn-light" data-yedit="' + esc(y.SpreadsheetId) + '"><i class="bi bi-pencil"></i></button></td></tr>';
+            '<td class="small text-muted">' + U.vnDateTime(y.CheckedAt) + '</td><td><div class="d-flex flex-column gap-1 align-items-end">' + tog + '<button class="btn btn-sm btn-light" data-yedit="' + esc(y.SpreadsheetId) + '"><i class="bi bi-pencil"></i></button></div></td></tr>';
         }).join('') + '</tbody></table></div></div>' +
         '<div class="alert alert-light border small mt-3 mb-0"><b>Cách hệ thống xử lý:</b><ul class="mb-0 ps-3">' +
           '<li>Phiếu <span class="kbd">XN-YYMMDD-NNN</span> ghi vào DB <b>Đang ghi</b> của năm 20YY. Tra cứu/thống kê chỉ đọc các DB có <b>khoảng ngày</b> giao với khoảng đang chọn.</li>' +
@@ -912,6 +917,7 @@
           '<li><b>Sang năm mới:</b> phiếu đầu tiên của năm tự tạo <span class="kbd">DB_' + (thisYear + 1) + '</span> (cùng thư mục Drive với DB cũ). Từ 15/12 hệ thống tạo sẵn DB năm sau. DB năm cũ giữ nguyên.</li>' +
           '<li><b>DB đầy:</b> khi DB đang ghi chạm <b>ngưỡng số dòng</b> (Phiếu hoặc Kết quả, chỉnh bên phải) hoặc 85% dung lượng ô, hệ thống tự tạo DB nối tiếp (vd <span class="kbd">DB_' + thisYear + '_2</span>); DB cũ chuyển "Đầy – chỉ sửa" (vẫn mở/sửa phiếu cũ).</li>' +
           '<li><b>Khóa sổ:</b> chuyển DB năm cũ sang "Khóa sổ" để chặn mọi chỉnh sửa.</li>' +
+          '<li><b><i class="bi bi-plug"></i> Ngắt kết nối</b> (DB năm trước ' + thisYear + '): hệ thống không mở file đó nữa → tra cứu, lịch sử chỉ số, thống kê, setup, đo dung lượng nhanh hơn. File và dữ liệu giữ nguyên; lần khám trong hồ sơ BN vẫn được giữ để tính tái khám. Cần xem phiếu cũ → bấm nút <i class="bi bi-plug-fill"></i> <b>Kết nối lại</b> (dùng ngay, không cần dựng lại chỉ mục).</li>' +
           '<li><b>Tối ưu dung lượng:</b> xóa cột trống bên phải và dòng trống dư (giữ 200 dòng) ở mọi bảng. Hệ thống tự chạy lúc 01:00 hằng đêm; bấm nút để chạy ngay.</li></ul></div></div>' +
         '<div class="col-xl-4"><div class="card mb-3"><div class="card-header"><i class="bi bi-sliders"></i> Ngưỡng tạo DB nối tiếp</div><div class="card-body"><form id="yl-form" class="row g-2">' +
           '<div class="col-6"><label class="form-label" for="yl-o">Số phiếu tối đa</label><input class="form-control tabular" id="yl-o" name="orders" inputmode="numeric" value="' + lim.orders + '"></div>' +
@@ -920,7 +926,7 @@
           '</form></div><div class="card-footer bg-white text-end"><button class="btn btn-primary btn-sm" id="yl-save"><i class="bi bi-save"></i> Lưu ngưỡng</button></div></div>' +
         '<div class="card"><div class="card-header" id="y-title">Kết nối Sheet có sẵn</div><div class="card-body"><form id="y-form" class="row g-2">' +
         '<div class="col-4"><label class="form-label">Năm</label><input class="form-control" name="Year" required inputmode="numeric" value="' + thisYear + '"></div>' +
-        '<div class="col-8"><label class="form-label">Trạng thái</label><select class="form-select" name="Mode"><option value="RW">Đang ghi</option><option value="FULL">Đầy – chỉ sửa</option><option value="RO">Khóa sổ (chỉ đọc)</option></select></div>' +
+        '<div class="col-8"><label class="form-label">Trạng thái</label><select class="form-select" name="Mode"><option value="RW">Đang ghi</option><option value="FULL">Đầy – chỉ sửa</option><option value="RO">Khóa sổ (chỉ đọc)</option><option value="OFF">Ngắt kết nối (không quét)</option></select></div>' +
         '<div class="col-12"><label class="form-label">Link hoặc ID Google Sheet</label><input class="form-control mono" name="SpreadsheetId" required placeholder="https://docs.google.com/spreadsheets/d/…"></div>' +
         '<div class="col-12"><label class="form-label">Tên file Google Sheet</label><input class="form-control" name="Note" maxlength="100" placeholder="DB_' + thisYear + '"><div class="form-text">Sửa tên ở đây sẽ đổi tên file trên Google Drive. Để trống = giữ tên file hiện tại.</div></div></form>' +
         '<div id="y-test" class="small mt-2"></div></div><div class="card-footer bg-white d-flex gap-2 justify-content-end"><button class="btn btn-light" id="y-check"><i class="bi bi-plug"></i> Kiểm tra</button><button class="btn btn-primary" id="y-save">Lưu</button></div></div>' +
@@ -939,7 +945,7 @@
       };
       U.$('#y-save', body).onclick = function () {
         if (!form.reportValidity()) return;
-        U.api('admin.years.save', U.formData(form)).then(function (l) { U.toast('Đã lưu kết nối'); render(l); }).catch(function () {});
+        U.api('admin.years.save', U.formData(form)).then(function (l) { U.toast('Đã lưu kết nối'); syncState(l); render(l); }).catch(function () {});
       };
       U.$('#yl-save', body).onclick = function () {
         var num = function (id) { return Number(String(U.$(id, body).value).replace(/[^\d]/g, '') || 0); };
@@ -978,6 +984,28 @@
         });
       };
     }
+    // Ngắt / kết nối lại – gắn 1 lần (render() chạy lại nhiều lần trên cùng body)
+    var curList = [];
+    var syncState = function (l) {   // cập nhật phạm vi DB cho gợi ý "đọc x/y DB" ở các màn khác, không cần đăng nhập lại
+      App.state.years = l.filter(function (y) { return y.Mode !== 'OFF'; }).map(function (y) { return { Year: y.Year, Mode: y.Mode, Note: y.Note, MinDate: y.MinDate, MaxDate: y.MaxDate, UsedPercent: y.UsedPercent }; });
+      App.state.yearsOff = l.filter(function (y) { return y.Mode === 'OFF'; }).map(function (y) { return { Year: y.Year, Note: y.Note }; });
+    };
+    var setMode = function (id, mode, btn) {
+      btn.disabled = true;
+      U.api('admin.years.mode', { SpreadsheetId: id, Mode: mode }).then(function (l) {
+        U.toast(mode === 'OFF' ? 'Đã ngắt kết nối – tra cứu/thống kê sẽ bỏ qua DB này' : 'Đã kết nối lại (Khóa sổ – chỉ đọc)');
+        syncState(l); render(l);
+      }).catch(function () { btn.disabled = false; });
+    };
+    U.on(body, 'click', '[data-yoff]', function (e, el) {
+      var y = curList.filter(function (x) { return x.SpreadsheetId === el.getAttribute('data-yoff'); })[0];
+      if (!y) return;
+      U.confirm('Ngắt kết nối ' + (y.Note || y.Year), 'Tra cứu phiếu, lịch sử chỉ số, thống kê, chỉ mục, setup sẽ <b>không đọc</b> file này nữa. File Google Sheet và dữ liệu giữ nguyên, có thể <b>Kết nối lại</b> bất cứ lúc nào.', 'Ngắt kết nối')
+        .then(function (ok) { if (ok) setMode(y.SpreadsheetId, 'OFF', el); });
+    });
+    U.on(body, 'click', '[data-yon]', function (e, el) { setMode(el.getAttribute('data-yon'), 'RO', el); });
+    var render0 = render;
+    render = function (l) { curList = l; render0(l); };
     Promise.all([U.api('admin.years.list'), U.api('admin.years.limits')]).then(function (r) { lim = r[1]; render(r[0]); }).catch(function () {});
   }
 
@@ -986,7 +1014,8 @@
       '<button class="btn btn-outline-primary" id="sy-cache"><i class="bi bi-arrow-repeat"></i> Xóa cache & tải lại danh mục</button></div></div></div>' +
       '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Thông tin</h6><div class="small">Phiên bản máy chủ (Apps Script): <b>' + esc((App.state.settings || {}).APP_VERSION || 'không rõ – bản cũ') + '</b><br>Phiên bản giao diện (GitHub): <b>' + esc(App.FE_VERSION) + '</b>' +
         (String((App.state.settings || {}).APP_VERSION || '') !== App.FE_VERSION ? '<br><span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Hai phiên bản khác nhau – kiểm tra lại bước cập nhật (dán Code.gs + Deploy New version, upload đủ file giao diện, tải lại trang bằng Ctrl+F5)</span>' : '') + '<br>Chế độ: <b>' + (Api.isDemo ? 'DEMO (dữ liệu trong trình duyệt)' : 'Google Apps Script') + '</b><br>' +
-      'Kết nối năm: ' + App.state.years.map(function (y) { return y.Year + (y.Mode === 'RO' ? ' (RO)' : ''); }).join(', ') + '</div>' +
+      'Kết nối năm: ' + App.state.years.map(function (y) { return y.Year + (y.Mode === 'RO' ? ' (RO)' : ''); }).join(', ') +
+      ((App.state.yearsOff || []).length ? '<br>Đang ngắt kết nối: ' + App.state.yearsOff.map(function (y) { return y.Year; }).join(', ') : '') + '</div>' +
       (Api.isDemo ? '<button class="btn btn-outline-danger mt-3" id="sy-reset"><i class="bi bi-trash"></i> Xóa dữ liệu DEMO & tạo lại</button>' : '') + '</div></div></div>' +
       '<div class="col-md-6"><div class="card"><div class="card-body"><h6>Chỉ mục lần khám</h6><p class="small text-muted">Mỗi hồ sơ bệnh nhân lưu sẵn danh sách lần khám (cột VisitLog, sheet Patients) để mở hồ sơ, xem lịch sử và tính tái khám nhanh dù có nhiều DB năm. ' +
         'Tự cập nhật khi tạo/sửa/hủy phiếu và tự đối soát lúc 01:00. Chỉ cần dựng lại khi đã sửa/nhập phiếu trực tiếp trên Google Sheet.</p>' +

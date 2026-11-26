@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.2.3',
+  VERSION: '2.3.0',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -182,7 +182,7 @@ var CAPACITY = {
 };
 
 /** Chế độ DB năm: RW = đang ghi phiếu mới | FULL = đầy, chỉ sửa phiếu cũ | RO = khóa sổ, chỉ đọc. */
-var DB_MODE = { RW: 'RW', FULL: 'FULL', RO: 'RO' };
+var DB_MODE = { RW: 'RW', FULL: 'FULL', RO: 'RO', OFF: 'OFF' };   // OFF = ngắt kết nối: giữ khai báo, không quét/không mở file
 
 var SECURITY = {
   HASH_ITERATIONS: 300,
@@ -260,6 +260,7 @@ var ROUTES = {
   'admin.settings.save':   { fn: function (p, c) { return AdminService.saveSettings(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.list':      { fn: function () { return AdminService.listYearDbs(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.save':      { fn: function (p, c) { return AdminService.saveYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
+  'admin.years.mode':      { fn: function (p, c) { return AdminService.setYearDbMode(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.optimize':  { fn: function (p, c) { return AdminService.optimizeStorage(p, c); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.limits':    { fn: function (p, c) { return p && p.orders !== undefined ? AdminService.saveYearLimits(p, c) : YearDb.limits(); }, perm: PERM.ADMIN_CONFIG },
   'admin.years.create':    { fn: function (p, c) { return AdminService.createYearDb(p, c); }, perm: PERM.ADMIN_CONFIG },
@@ -288,7 +289,7 @@ ROUTES['sys.batch'] = { fn: function (p, ctx) {
     try {
       var r = ROUTES[c.action];
       if (!r || c.action === 'sys.batch' || r.auth === false) throw new AppError('NOT_FOUND', 'Action không hợp lệ trong batch: ' + c.action);
-      if (r.perm && !Auth.hasPerm(ctx, r.perm)) throw new AppError('FORBIDDEN', 'Không có quyền: ' + c.action);
+      if (r.perm && !Auth.hasPerm(ctx, r.perm)) throw new AppError('FORBIDDEN', 'Tài khoản không có quyền thực hiện chức năng này.');
       return { ok: true, data: r.fn(c.payload || {}, ctx) };
     } catch (err) {
       return { ok: false, error: { code: err.code || 'SERVER_ERROR', message: err.message } };
@@ -475,15 +476,24 @@ function randomToken_() {
   return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
 }
 
+/** Trạng thái khóa của lượt thực thi hiện tại – Db dùng để biết dữ liệu vừa đọc còn "nóng" (không ai ghi chen được). */
+var LOCK_STATE_ = { depth: 0, epoch: 0 };
+
 /** Run fn under the script-wide lock (serialises writes from concurrent users). */
 function withLock_(fn) {
+  if (LOCK_STATE_.depth > 0) {   // đã giữ khóa (gọi lồng) → chạy luôn
+    LOCK_STATE_.depth++;
+    try { return fn(); } finally { LOCK_STATE_.depth--; }
+  }
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(SECURITY.LOCK_WAIT_MS)) {
     throw new AppError('BUSY', 'Hệ thống đang bận, vui lòng thử lại sau vài giây.');
   }
+  LOCK_STATE_.depth = 1; LOCK_STATE_.epoch++;
   try {
     return fn();
   } finally {
+    LOCK_STATE_.depth = 0;
     SpreadsheetApp.flush();
     lock.releaseLock();
   }
@@ -562,6 +572,20 @@ function U_money_(v) { return String(Math.round(Number(v) || 0)).replace(/\B(?=(
 var Db = (function () {
   var ssMemo = {};
   var sheetMemo = {};
+  /**
+   * Ảnh chụp dòng vừa đọc TRONG KHÓA (findBy) → updateRow/updateRows ghi đè ngay, bỏ 1 lệnh đọc lại.
+   * Chỉ dùng khi: cùng lượt khóa, bảng đó chưa bị ghi lại kể từ lúc đọc (gen), cùng số cột. Mọi trường hợp khác → đọc lại như cũ.
+   */
+  var snap = {}, gen = {};
+  function skey_(table, year) { try { return resolveId_(table, year, false) + '|' + table; } catch (e) { return ''; } }
+  function bump_(table, year) { var k = skey_(table, year); gen[k] = (gen[k] || 0) + 1; }
+  function keep_(k, row, vals, width) {
+    if (LOCK_STATE_.depth > 0 && k) snap[k + '|' + row] = { v: vals, g: gen[k] || 0, e: LOCK_STATE_.epoch, w: width };
+  }
+  function snapOf_(k, row, width) {
+    var s = snap[k + '|' + row];
+    return s && LOCK_STATE_.depth > 0 && s.e === LOCK_STATE_.epoch && s.g === (gen[k] || 0) && s.w === width ? s.v : null;
+  }
   var headerMemo = {};
 
   function propId_(key) {
@@ -593,10 +617,15 @@ var Db = (function () {
       if (!db) throw new AppError('VALIDATION', 'Thiếu DB năm cho bảng ' + table);
       if (typeof db === 'string' && db.length > 20) {
         var e = YearDb.byId(db);
+        if (!e && YearDb.isOff(db)) {   // chốt chặn: không bao giờ mở file DB đã ngắt kết nối
+          YearDb._offHits++;
+          throw new AppError('DB_OFF', 'DB ' + (YearDb.isOff(db).Note || db) + ' đang ngắt kết nối (Quản trị → Kết nối dữ liệu năm → Kết nối lại).');
+        }
         if (forWrite && e && e.Mode === DB_MODE.RO) throw new AppError('READ_ONLY', 'Dữ liệu ' + (e.Note || e.Year) + ' đang ở chế độ chỉ đọc.');
         return db;
       }
       var y = forWrite ? YearDb.active(db) : (YearDb.active(db) || YearDb.forYear(db)[0]);
+      if (!y) YearDb.assertConnected_(db);
       if (!y) throw new AppError('NO_YEAR_DB', 'Chưa có Google Sheet dữ liệu năm ' + db + ' (Quản trị → Kết nối dữ liệu năm → Tạo DB mới).');
       return y.SpreadsheetId;
     }
@@ -864,9 +893,11 @@ var Db = (function () {
     var out = [];
     var target = {};
     rows.forEach(function (r) { target[r] = true; });
-    if (span <= rows.length * 4 || span <= 400) {
+    var sk = LOCK_STATE_.depth > 0 ? skey_(table, year) : '';
+    if (span <= rows.length * 4 || span <= 1500) {   // ≤ 1.500 dòng: 1 lệnh đọc cả khối nhanh hơn nhiều lệnh nhỏ
       var block = sh.getRange(minR, 1, span, hdr.width).getValues();
       block.forEach(function (r, i) {
+        if (sk) keep_(sk, minR + i, r, hdr.width);
         if (target[minR + i]) {
           var o = rowToObj_(r, hdr);
           Object.defineProperty(o, '_row', { value: minR + i, enumerable: false });
@@ -884,6 +915,7 @@ var Db = (function () {
       if (clusters.length <= 12) {
         clusters.forEach(function (c) {
           sh.getRange(c[0], 1, c[1] - c[0] + 1, hdr.width).getValues().forEach(function (r, i) {
+            if (sk) keep_(sk, c[0] + i, r, hdr.width);
             if (!target[c[0] + i]) return;
             var o = rowToObj_(r, hdr);
             Object.defineProperty(o, '_row', { value: c[0] + i, enumerable: false });
@@ -928,14 +960,16 @@ var Db = (function () {
     }
     invalidate_(table, year);
     if (table === T.ORDERS || table === T.RESULTS) RowCounter.note(resolveId_(table, year, true), table, start + rows.length - 2);   // số dòng dữ liệu, không tốn thêm lệnh gọi Sheets
+    return start;   // dòng đầu tiên vừa ghi
   }
 
   /** Update a single row (merge `patch` onto existing values). */
   function updateRow(table, year, rowNum, patch) {
     var sh = sheet(table, year, true);
     var hdr = header_(sh);
-    var cur = sh.getRange(rowNum, 1, 1, hdr.width).getValues()[0];
+    var cur = snapOf_(skey_(table, year), rowNum, hdr.width) || sh.getRange(rowNum, 1, 1, hdr.width).getValues()[0];
     sh.getRange(rowNum, 1, 1, hdr.width).setValues([objToRow_(patch, hdr, cur)]);
+    bump_(table, year);
     invalidate_(table, year);
   }
 
@@ -947,15 +981,20 @@ var Db = (function () {
     var minR = Math.min.apply(null, items.map(function (i) { return i.row; }));
     var maxR = Math.max.apply(null, items.map(function (i) { return i.row; }));
     var rng = sh.getRange(minR, 1, maxR - minR + 1, hdr.width);
-    var block = rng.getValues();
+    // Cả khối dòng [minR..maxR] vừa đọc trong khóa → dựng lại từ ảnh chụp, không đọc lại
+    var k = skey_(table, year), block = [];
+    for (var r = minR; r <= maxR && block; r++) { var v = snapOf_(k, r, hdr.width); if (v) block.push(v); else block = null; }
+    if (!block) block = rng.getValues();
     items.forEach(function (it) { block[it.row - minR] = objToRow_(it.patch, hdr, block[it.row - minR]); });
     rng.setValues(block);
+    bump_(table, year);
     invalidate_(table, year);
   }
 
   function deleteRows(table, year, rowNums) {
     var sh = sheet(table, year, true);
     rowNums.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+    bump_(table, year);
     if (rowNums.length) invalidate_(table, year);
   }
 
@@ -967,6 +1006,7 @@ var Db = (function () {
     if (last > 1) sh.getRange(2, 1, last - 1, hdr.width).clearContent();
     if (objs.length + 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), objs.length + 1 - sh.getMaxRows() + ROW_BUFFER);
     if (objs.length) sh.getRange(2, 1, objs.length, hdr.width).setValues(objs.map(function (o) { return objToRow_(o, hdr); }));
+    bump_(table, year);
     invalidate_(table, year);
   }
 
@@ -983,6 +1023,7 @@ var Db = (function () {
   function setCell(table, year, rowNum, column, value) {
     var sh = sheet(table, year, true);
     sh.getRange(rowNum, colIndex_(sh, column)).setValue(value);
+    bump_(table, year);
     invalidate_(table, year);
   }
   /** Ghi cả 1 cột cho các dòng 2..(1+values.length) trong 1 lệnh. */
@@ -990,6 +1031,7 @@ var Db = (function () {
     if (!values.length) return;
     var sh = sheet(table, year, true);
     sh.getRange(2, colIndex_(sh, column), values.length, 1).setValues(values.map(function (v) { return [v]; }));
+    bump_(table, year);
     invalidate_(table, year);
   }
 
@@ -1017,7 +1059,7 @@ var Db = (function () {
     replaceAll: replaceAll,
     usedCells: usedCells,
     bumpHeaderVersion: bumpHeaderVersion,
-    _resetMemo: function () { ssMemo = {}; sheetMemo = {}; headerMemo = {}; },   // mỗi request GAS là 1 lượt thực thi mới (dùng cho đo hiệu năng)
+    _resetMemo: function () { ssMemo = {}; sheetMemo = {}; headerMemo = {}; snap = {}; gen = {}; },   // mỗi request GAS là 1 lượt thực thi mới (dùng cho đo hiệu năng)
     trimSheet: trimSheet_,
     optimize: optimize,
     coreIds: coreIds,
@@ -1032,9 +1074,23 @@ var Db = (function () {
  *  - Sang năm mới / DB đầy → tự tạo Google Sheet DB_<năm>[_n] cạnh DB cũ (ensureActive).
  */
 var YearDb = {
+  /**
+   * DB năm ĐANG KẾT NỐI (bỏ DB "Ngắt kết nối" – OFF). Mọi tra cứu / lịch sử / thống kê / chỉ mục / setup đi qua hàm này
+   * → DB đã ngắt không bao giờ bị mở. Danh sách đầy đủ (kể cả OFF): YearDb.registry().
+   */
   all: function () {
+    if (YearDb._live) return YearDb._live;
+    return (YearDb._live = YearDb.registry().filter(function (r) { return r.Mode !== DB_MODE.OFF; }));
+  },
+  _live: null,
+  /** DB năm đã khai báo nhưng đang ngắt kết nối. */
+  off: function () { return YearDb.registry().filter(function (r) { return r.Mode === DB_MODE.OFF; }); },
+  isOff: function (id) { return YearDb.off().filter(function (r) { return r.SpreadsheetId === id; })[0] || null; },
+  _offHits: 0,
+  registry: function () {
+    if (YearDb._reg) return YearDb._reg;
     var cached = CacheUtil.get(CACHE.YEAR_DBS);
-    if (cached) return cached;
+    if (cached) return (YearDb._reg = cached);
     var rows = Db.readAll(T.YEAR_DBS).map(function (r) {
       return { Year: Number(r.Year), SpreadsheetId: String(r.SpreadsheetId).trim(), Mode: String(r.Mode || 'RW').toUpperCase(),
                Note: r.Note, UsedCells: toNum_(r.UsedCells, 0), CheckedAt: r.CheckedAt,
@@ -1043,7 +1099,16 @@ var YearDb = {
     }).filter(function (r) { return r.Year && r.SpreadsheetId; });
     rows.sort(function (a, b) { return a.Year - b.Year; });
     CacheUtil.put(CACHE.YEAR_DBS, rows, CACHE.TTL_LONG);
-    return rows;
+    return (YearDb._reg = rows);
+  },
+  _reg: null,
+  /** Lỗi rõ ràng khi cần DB của năm đã ngắt kết nối. */
+  assertConnected_: function (year) {
+    var off = YearDb.off().filter(function (r) { return r.Year === Number(year); });
+    if (off.length && !YearDb.forYear(year).length) {
+      throw new AppError('DB_OFF', 'Dữ liệu năm ' + year + ' (' + off.map(function (r) { return r.Note || r.Year; }).join(', ') +
+        ') đang NGẮT KẾT NỐI. Quản trị → Kết nối dữ liệu năm → "Kết nối lại" để xem/sửa phiếu năm này.');
+    }
   },
   byId: function (id) { return YearDb.all().filter(function (r) { return r.SpreadsheetId === id; })[0] || null; },
   forYear: function (year) { var y = Number(year); return YearDb.all().filter(function (r) { return r.Year === y; }); },
@@ -1106,7 +1171,7 @@ var YearDb = {
     var y = YearDb.yearFromOrderId(orderId);
     if (!y) throw new AppError('VALIDATION', 'Mã phiếu không đúng định dạng XN-YYMMDD-NNN: ' + orderId);
     var list = YearDb.forYear(y);
-    if (!list.length) throw new AppError('NO_YEAR_DB', 'Chưa có DB dữ liệu năm ' + y);
+    if (!list.length) { YearDb.assertConnected_(y); throw new AppError('NO_YEAR_DB', 'Chưa có DB dữ liệu năm ' + y); }
     if (list.length === 1) return list[0].SpreadsheetId;
     var c = CacheService.getScriptCache(), key = 'loc_' + orderId;
     var hit = c.get(key);
@@ -1124,6 +1189,7 @@ var YearDb = {
    * DB RW vượt ngưỡng dung lượng → tạo DB nối tiếp, DB cũ chuyển FULL.
    */
   ensureActive: function (year) {
+    YearDb.assertConnected_(year);   // năm đã ngắt kết nối → không tự tạo DB mới chồng lên
     var act = YearDb.active(year);
     var list = YearDb.forYear(year);
     if (!act && list.some(function (r) { return r.Mode === DB_MODE.RO; })) {
@@ -1201,6 +1267,7 @@ var YearDb = {
    */
   refreshCapacity: function (force) {
     var rows = Db.readAll(T.YEAR_DBS).filter(function (r) {
+      if (String(r.Mode).toUpperCase() === DB_MODE.OFF) return false;   // ngắt kết nối → không mở file
       return force || !(String(r.Mode).toUpperCase() === DB_MODE.RO && r.CheckedAt && toDateStr_(r.MinDate) && String(r.UsedCells) !== '');
     });
     var items = rows.map(function (r) {
@@ -1224,7 +1291,7 @@ var YearDb = {
     YearDb.invalidate();
     return YearDb.all();
   },
-  invalidate: function () { CacheUtil.remove(CACHE.YEAR_DBS); }
+  invalidate: function () { CacheUtil.remove(CACHE.YEAR_DBS); YearDb._reg = null; YearDb._live = null; }
 };
 
 /**
@@ -1462,6 +1529,7 @@ var Auth = {
       years: YearDb.all().map(function (y) {
         return { Year: y.Year, Mode: y.Mode, Note: y.Note, MinDate: y.MinDate, MaxDate: y.MaxDate, UsedPercent: Math.round(y.UsedCells / CAPACITY.MAX_CELLS * 1000) / 10 };
       }),
+      yearsOff: YearDb.off().map(function (y) { return { Year: y.Year, Note: y.Note }; }),
       capacityWarnPercent: CAPACITY.WARN_PERCENT,
       catalog: Catalog.get()
     };
@@ -1919,7 +1987,9 @@ var PatientService = {
       data.IsActive = true;
       data.CreatedAt = nowIso_();
       data.CreatedBy = ctx.username;
-      Db.insert(T.PATIENTS, null, [data]);
+      var at = Db.insert(T.PATIENTS, null, [data]);
+      // Nhớ sẵn dòng của BN mới → tạo phiếu ngay sau đó không phải tìm lại (chỉ mục lần khám, tính tái khám)
+      try { if (at) CacheService.getScriptCache().put('prow_' + data.PatientID, String(at), CACHE.TTL_LONG); } catch (e) { /* bỏ qua */ }
       CacheUtil.remove(PatientService.INDEX_KEY);
       SysLog.write(ctx.username, 'PATIENT_CREATE', 'Patient', data.PatientID, { FullName: data.FullName, Phone: data.Phone });
       return { patient: PatientService.publicView_(data) };
@@ -2303,7 +2373,8 @@ var OrderService = {
       VisitIndex.patch(Object.assign({}, cur, cpatch), db);
       HistCache.drop(cur.PatientID, db);
       Audit.write(ctx, db, 'ORDER_CANCEL', 'Order', p.orderId, { reason: p.reason, previousStatus: cur.Status });
-      return OrderService.get(p.orderId, ctx);
+      // Dựng kết quả từ dòng phiếu vừa ghi (không đọc lại Orders)
+      return OrderService.buildView_(Object.assign({}, cur, cpatch), Db.findBy(T.ORDER_PANELS, db, 'OrderID', p.orderId), Db.findBy(T.RESULTS, db, 'OrderID', p.orderId), ctx);
     });
   },
 
@@ -3655,13 +3726,61 @@ var AdminService = {
     }
   },
 
-  /** p: { Year, SpreadsheetId, Mode ('RW'|'RO'), Note } – tạo bảng thiếu nếu Mode = RW. */
+  /** Ngắt kết nối chỉ cho DB năm đã qua (năm nay / năm sau còn nhận phiếu mới). */
+  assertCanDisconnect_: function (year) {
+    var now = Number(todayStr_().substring(0, 4));
+    if (Number(year) >= now) throw new AppError('VALIDATION', 'Không ngắt kết nối DB năm ' + year + ': năm này vẫn đang nhận phiếu. Chỉ ngắt được DB các năm trước ' + now + '.');
+  },
+
+  /**
+   * Ngắt / kết nối lại nhanh 1 DB năm. p: { SpreadsheetId, Mode: 'OFF' | 'RO' | 'FULL' | 'RW' }
+   *  - OFF: không đọc file nữa (tra cứu, lịch sử chỉ số, thống kê, chỉ mục, setup, đo dung lượng đều bỏ qua). Dữ liệu & file giữ nguyên.
+   *    Danh sách lần khám trong hồ sơ BN vẫn giữ → kết nối lại là dùng ngay, không cần dựng lại chỉ mục.
+   *  - Kết nối lại: kiểm tra quyền truy cập file trước.
+   */
+  setYearDbMode: function (p, ctx) {
+    required_(p, ['SpreadsheetId', 'Mode']);
+    var id = AdminService.extractId_(p.SpreadsheetId);
+    var mode = DB_MODE[String(p.Mode).toUpperCase()];
+    if (!mode) throw new AppError('VALIDATION', 'Trạng thái không hợp lệ');
+    return withLock_(function () {
+      var cur = Db.findOne(T.YEAR_DBS, null, 'SpreadsheetId', id);
+      if (!cur) throw new AppError('NOT_FOUND', 'Không thấy DB ' + id);
+      if (mode === DB_MODE.OFF) AdminService.assertCanDisconnect_(cur.Year);
+      else {
+        var test = AdminService.testYearDb({ SpreadsheetId: id });
+        if (!test.ok) throw new AppError('DB_UNAVAILABLE', test.error);
+        if (mode === DB_MODE.RW) {
+          Db.readAll(T.YEAR_DBS).forEach(function (r) {
+            if (Number(r.Year) === Number(cur.Year) && String(r.SpreadsheetId) !== id && String(r.Mode).toUpperCase() === DB_MODE.RW) Db.updateRow(T.YEAR_DBS, null, r._row, { Mode: DB_MODE.FULL });
+          });
+        }
+      }
+      Db.updateRow(T.YEAR_DBS, null, cur._row, { Mode: mode });
+      YearDb.invalidate();
+      SysLog.write(ctx.username, mode === DB_MODE.OFF ? 'YEAR_DB_OFF' : 'YEAR_DB_ON', 'YearDatabase', String(cur.Year), { id: id, from: cur.Mode, to: mode });
+      return AdminService.listYearDbs();
+    });
+  },
+
+  /** p: { Year, SpreadsheetId, Mode ('RW'|'FULL'|'RO'|'OFF'), Note } – tạo bảng thiếu nếu Mode = RW. */
   saveYearDb: function (p, ctx) {
     required_(p, ['Year', 'SpreadsheetId']);
     var year = Number(p.Year);
     if (year < 2000 || year > 2100) throw new AppError('VALIDATION', 'Năm không hợp lệ');
     var id = AdminService.extractId_(p.SpreadsheetId);
     var mode = DB_MODE[String(p.Mode || 'RW').toUpperCase()] || DB_MODE.RW;
+    if (mode === DB_MODE.OFF) {   // ngắt kết nối: không mở file (file có thể đã mất quyền / đã chuyển chỗ)
+      AdminService.assertCanDisconnect_(year);
+      return withLock_(function () {
+        var cur0 = Db.findOne(T.YEAR_DBS, null, 'SpreadsheetId', id);
+        var row0 = { Year: year, SpreadsheetId: id, Mode: mode, Note: String(p.Note || '').trim() || (cur0 && cur0.Note) || ('DB_' + year) };
+        if (cur0) Db.updateRow(T.YEAR_DBS, null, cur0._row, row0); else Db.insert(T.YEAR_DBS, null, [row0]);
+        YearDb.invalidate();
+        SysLog.write(ctx.username, 'YEAR_DB_OFF', 'YearDatabase', String(year), row0);
+        return AdminService.listYearDbs();
+      });
+    }
     var test = AdminService.testYearDb({ SpreadsheetId: id });
     if (!test.ok) throw new AppError('DB_UNAVAILABLE', test.error);
     // Tên = tên file Google Sheet thật: nhập tên mới → đổi tên file trên Drive; để trống → giữ tên file hiện tại
@@ -4115,7 +4234,7 @@ var Discount = {
   },
   /** BN đã có phiếu (chưa hủy) với ngày khám TRƯỚC `date` → tái khám. Duyệt DB mới → cũ, dừng ngay khi thấy. */
   isReturn_: function (patientId, date) {
-    var v = VisitIndex.forPatient(patientId);      // chỉ mục lần khám → 0 DB năm phải mở
+    var v = VisitIndex.forPatientAll_(patientId);  // chỉ mục lần khám (kể cả DB đã ngắt kết nối – chỉ đọc ô, không mở file)
     if (v) return v.some(function (o) { return o.Status !== ENUM.ORDER_STATUS.CANCELLED && o.OrderDate < date; });
     var y = yearOf_(date);
     var dbs = YearDb.all().filter(function (r) { return r.Year <= y; }).slice().reverse();
@@ -4236,7 +4355,7 @@ var VisitIndex = {
     if (s === '!') return null;
     var arr;
     try { arr = JSON.parse(s); } catch (e) { return null; }
-    var dbs = YearDb.all();
+    var dbs = YearDb.registry();   // kể cả DB ngắt kết nối → giữ nguyên mục khi ghi lại
     var full = function (k) { for (var i = 0; i < dbs.length; i++) if (dbs[i].SpreadsheetId.indexOf(k) === 0) return dbs[i].SpreadsheetId; return k; };
     return arr.map(function (a) {
       return { OrderID: a[0], OrderDate: a[1], DbId: full(String(a[2] || '')), Status: VisitIndex.ST_R[a[3]] || a[3],
@@ -4287,7 +4406,19 @@ var VisitIndex = {
    * Các lần khám của BN (mới → cũ) | null nếu chỉ mục chưa sẵn sàng / BN quá nhiều lần khám (người gọi dùng cách cũ).
    * patientRow: dòng hồ sơ vừa đọc (PatientService.get) → 0 lệnh gọi thêm.
    */
+  /** Bỏ các lần khám nằm ở DB đang ngắt kết nối (vẫn giữ trong ô VisitLog). */
+  live_: function (list) {
+    if (!list) return list;
+    var off = YearDb.off();
+    if (!off.length) return list;
+    var bad = {};
+    off.forEach(function (r) { bad[r.SpreadsheetId] = true; });
+    return list.filter(function (v) { return !bad[v.DbId]; });
+  },
   forPatient: function (patientId, patientRow) {
+    return VisitIndex.live_(VisitIndex.forPatientAll_(patientId, patientRow));
+  },
+  forPatientAll_: function (patientId, patientRow) {
     if (!VisitIndex.ready()) return null;
     if (patientRow && Object.prototype.hasOwnProperty.call(patientRow, VisitIndex.COL)) {
       var l0 = VisitIndex.decode_(patientRow[VisitIndex.COL]);
@@ -4348,7 +4479,10 @@ var VisitIndex = {
   },
   /** Dựng lại toàn bộ từ mọi DB năm (setup / Admin / 01:00 khi chưa có). Gọi trong withLock_. */
   rebuild: function () {
-    var r = VisitIndex.writeAll_(VisitIndex.collect_(YearDb.all()), null);
+    // DB ngắt kết nối: không đọc, giữ nguyên các mục đã có của DB đó
+    var offIds = {};
+    YearDb.off().forEach(function (y) { offIds[y.SpreadsheetId] = true; });
+    var r = VisitIndex.writeAll_(VisitIndex.collect_(YearDb.all()), Object.keys(offIds).length ? function (e) { return !!offIds[e.DbId]; } : null);
     var props = PropertiesService.getScriptProperties();
     props.setProperty(VisitIndex.READY_PROP, nowIso_());
     props.deleteProperty(VisitIndex.DIRTY_PROP);
@@ -4416,8 +4550,11 @@ var RangeGuard = {
   /** Các DB năm sẽ phải đọc cho khoảng ngày (hiển thị cho người dùng). */
   scope: function (from, to) {
     var list = YearDb.inRange(from, to);
+    var a = yearOf_(from) || 1900, b = yearOf_(to) || 9999;
+    var off = YearDb.off().filter(function (r) { return r.Year >= a && r.Year <= b; });
     return { from: from, to: to, dbs: list.length, totalDbs: YearDb.all().length,
-             names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
+             names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }),
+             off: off.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   }
 };
 

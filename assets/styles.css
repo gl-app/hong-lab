@@ -234,3 +234,7 @@ input.res-input.res-calc { background: #f3f7f8; border-style: dashed; font-weigh
 .ms-menu{min-width:100%;max-height:320px;overflow:auto}.ms-item{cursor:pointer;white-space:normal}.ms-btn{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.ms-btn.ms-active{border-color:var(--bs-primary,#0f4c5c);font-weight:500}
 
 .sidebar .app-ver{font-size:11px;color:rgba(255,255,255,.6);margin-top:3px}.ver-warn{color:#fec84b;font-weight:600}
+/* DB năm ngắt kết nối */
+.st-off { background: #EEF1F4; color: #5F6B7A; }
+.row-off td { color: #8A94A3; }
+.row-off td a { color: #8A94A3; }
