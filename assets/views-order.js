@@ -924,7 +924,8 @@
         '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
           rowsHtml + '</tbody></table>' +
         (anyAbn ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
-        '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') + '</td>' +
+        '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') +
+          (p.PrintNote ? '<div class="pnote">' + String(p.PrintNote).split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</div>' : '') + '</td>' +
           '<td class="fr"><div class="mu">' + esc(s.CLINIC_CITY || 'Pleiku') + ', ngày ' + Number(od[2]) + ' tháng ' + Number(od[1]) + ' năm ' + od[0] + '</div>' +
           '<div class="role">TRƯỞNG PHÒNG XÉT NGHIỆM</div><div class="sig"></div><div class="nm">' + esc(s.LAB_HEAD || '') + '</div></td></tr></table>' +
         '<div class="note">' + esc(s.REPORT_FOOTER || '') + '<span class="pt">In lúc ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) + ' ' + now.toLocaleDateString('vi-VN') + '</span></div>' +
@@ -947,7 +948,7 @@
       '.res td{border:.5pt solid #c3ced4;padding:.32em .45em}.res tbody tr:nth-child(even) td{background:rgba(15,76,92,.045)}' +
       '.c{text-align:center}.mu{color:#5f6b7a}.tn{font-weight:600}.rv{font-weight:700;font-size:1.04em}.rf{font-size:.9em}.ab{color:#b42318}' +
       '.legend{font-size:.78em;color:#5f6b7a;margin-top:4px}' +
-      '.foot{margin-top:1em;page-break-inside:avoid;break-inside:avoid}.foot td{vertical-align:top}.fl{width:40%;padding-top:2px}.fr{width:60%;text-align:center}.fr .mu,.role,.nm{white-space:nowrap}' +
+      '.foot{margin-top:1em;page-break-inside:avoid;break-inside:avoid}.foot td{vertical-align:top}.fl{width:40%;padding-top:2px}.pnote{font-style:italic;font-size:.88em;margin-top:2.2em;padding-right:10px}.pnote div{margin-bottom:.35em}.fr{width:60%;text-align:center}.fr .mu,.role,.nm{white-space:nowrap}' +
       '.role{font-weight:700;margin-top:2px;letter-spacing:.02em}.nm{font-weight:700}' +
       '.note{font-size:.7em;color:#5f6b7a;font-style:italic;margin-top:.8em;padding-top:.4em;border-top:1px solid #e3e9ec}.pt{float:right;font-style:normal}' +
       '.wm{position:fixed;left:50%;top:54%;width:60%;transform:translate(-50%,-50%);opacity:' + wmOp + ';z-index:0;pointer-events:none}' +

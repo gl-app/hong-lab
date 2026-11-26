@@ -755,6 +755,8 @@
         '<div class="col-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="IsActive" id="p-act"' + (p.IsActive ? ' checked' : '') + '><label class="form-check-label" for="p-act">Đang sử dụng</label></div></div>' +
         '<div class="col-4"><label class="form-label">Khổ giấy in</label><select class="form-select" name="PageSize">' +
           [['', 'Theo cấu hình chung (' + esc(App.setting('PRINT_PAGE_SIZE', 'A5')) + ')'], ['A4', 'A4'], ['A5', 'A5']].map(function (o2) { return '<option value="' + o2[0] + '"' + ((p.PageSize || '') === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="col-12"><label class="form-label">Ghi chú trên phiếu in <span class="text-muted fw-normal small">· in nghiêng bên trái chữ ký · Enter để xuống dòng</span></label>' +
+          '<textarea class="form-control" name="PrintNote" rows="2" placeholder="VD: Huyết thanh được lưu giữ 72h, khi cần thiết có thể dùng làm thêm một số xét nghiệm khác.">' + esc(p.PrintNote || '') + '</textarea></div>' +
         '<div class="col-8"><label class="form-label">ID mẫu in Google Docs riêng (tuỳ chọn)</label><input class="form-control mono" name="TemplateDocId" value="' + esc(p.TemplateDocId || '') + '" placeholder="Bỏ trống = dùng mẫu chuẩn tự sinh"></div>' +
         '</form><label class="form-label mt-3">Chỉ số thuộc nhóm (thứ tự in theo thứ tự chọn)</label><div class="test-pick" style="max-height:260px;overflow:auto"><div class="d-flex flex-wrap column-gap-3">' +
         cat.tests.map(function (t) {

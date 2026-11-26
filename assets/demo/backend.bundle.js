@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.1.9',
+  VERSION: '2.2.0',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -71,7 +71,7 @@ SCHEMA[T.ROLES]       = ['RoleCode', 'RoleName', 'Permissions', 'IsSystem'];
 SCHEMA[T.USERS]       = ['Username', 'FullName', 'RoleCode', 'PasswordHash', 'Salt', 'IsActive',
                          'MustChangePassword', 'LastLoginAt', 'CreatedAt', 'UpdatedAt'];
 SCHEMA[T.PANELS]      = ['PanelCode', 'PanelName', 'PrintTitle', 'PrintSubtitle', 'PricingMode', 'Price',
-                         'SortOrder', 'IsActive', 'TemplateDocId', 'PageSize'];
+                         'SortOrder', 'IsActive', 'TemplateDocId', 'PageSize', 'PrintNote'];
 SCHEMA[T.TESTS]       = ['TestCode', 'TestName', 'Unit', 'ResultType', 'RefMinM', 'RefMaxM', 'RefMinF',
                          'RefMaxF', 'RefText', 'Price', 'SortOrder', 'IsActive', 'LegacyName', 'Formula'];
 SCHEMA[T.PANEL_TESTS] = ['PanelCode', 'TestCode', 'SortOrder'];
@@ -1615,7 +1615,7 @@ var Catalog = {
         PanelCode: String(r.PanelCode).trim(), PanelName: r.PanelName, PrintTitle: r.PrintTitle,
         PrintSubtitle: r.PrintSubtitle, PricingMode: String(r.PricingMode || 'TEST').toUpperCase(),
         Price: toNum_(r.Price, 0), SortOrder: toNum_(r.SortOrder, 999), IsActive: toBool_(r.IsActive),
-        TemplateDocId: r.TemplateDocId || '',
+        TemplateDocId: r.TemplateDocId || '', PrintNote: String(r.PrintNote || ''),
         PageSize: /^A[45]$/.test(String(r.PageSize || '').toUpperCase().trim()) ? String(r.PageSize).toUpperCase().trim() : ''   // '' = theo cấu hình chung
       };
     }).sort(function (a, b) { return a.SortOrder - b.SortOrder; });
@@ -3067,6 +3067,13 @@ var PrintService = {
       foot.getCell(fr, 1).setWidth(contentW * 0.6).setPaddingTop(fr === 0 ? pd(10) : 0).setPaddingBottom(0);
       var lp = PrintService.styleText_(foot.getCell(fr, 0).getChild(0).asParagraph(), fs(9.5), false, C.text);
       if (fr === 0 && o.FollowUpDate) lp.editAsText().setBold(14, lp.getText().length - 1, true);
+      // Ghi chú của nhóm XN (VD: "Huyết thanh được lưu giữ 72h…") – in nghiêng bên trái khối chữ ký
+      if (fr === 1 && panel.PrintNote) {
+        String(panel.PrintNote).split('\n').forEach(function (line, li) {
+          var np0 = li === 0 ? lp : foot.getCell(fr, 0).appendParagraph('');
+          PrintService.para_(np0, line, fs(8.5), false, C.text).setSpacingBefore(li === 0 ? pd(6) : pd(2)).editAsText().setItalic(true);
+        });
+      }
       var rp = foot.getCell(fr, 1).getChild(0).asParagraph();
       PrintService.styleText_(rp, fr === 0 ? fs(9) : fs(10), fr === 1 || fr === 3, fr === 0 ? C.muted : C.text);
       rp.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
@@ -3599,8 +3606,10 @@ var AdminService = {
         PanelCode: code, PanelName: String(panel.PanelName).trim(), PrintTitle: panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM',
         PrintSubtitle: panel.PrintSubtitle || '', SortOrder: toNum_(panel.SortOrder, 999),
         IsActive: panel.IsActive === undefined ? true : toBool_(panel.IsActive), TemplateDocId: panel.TemplateDocId || '',
-        PageSize: /^A[45]$/.test(String(panel.PageSize || '').toUpperCase()) ? String(panel.PageSize).toUpperCase() : ''
+        PageSize: /^A[45]$/.test(String(panel.PageSize || '').toUpperCase()) ? String(panel.PageSize).toUpperCase() : '',
+        PrintNote: String(panel.PrintNote || '').replace(/\r\n?/g, '\n').split('\n').map(function (l) { return l.trim(); }).filter(String).join('\n')   // ghi chú in nghiêng cạnh chữ ký
       };
+      Db.ensureSheet(Db.sheet(T.PANELS, null).getParent(), T.PANELS);   // bản cũ chưa có cột PrintNote → tự thêm (không cần chạy setup)
       // Cách tính giá & giá nhóm chỉ đổi khi có quyền Bảng giá
       if (Auth.hasPerm(ctx, PERM.ADMIN_PRICE)) {
         row.PricingMode = String(panel.PricingMode || 'TEST').toUpperCase() === 'PANEL' ? 'PANEL' : 'TEST';
