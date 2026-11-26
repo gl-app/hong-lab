@@ -100,7 +100,7 @@
           ['Hoàn tất', U.num(s.completed), 'Tỷ lệ ' + s.completionRate + '%', 'var(--success)'],
           ['Đang chờ KQ', U.num(s.pending), s.pendingOver24h ? s.pendingOver24h + ' phiếu chờ > 24 giờ' : 'Không có phiếu chờ > 24 giờ', s.pendingOver24h ? 'var(--danger)' : 'var(--warn)'],
           ['Hôm nay', s.todayCompleted + ' / ' + s.today, 'hoàn tất / tổng', 'var(--brand)'],
-          ['Thời gian trả KQ', s.avgTatHours === null ? '—' : s.avgTatHours + ' giờ', s.medianTatHours === null ? 'trung bình' : 'trung vị ' + s.medianTatHours + ' giờ', 'var(--brand)']
+          ['Thời gian trả KQ', App.fmtHours(s.avgTatHours, true), s.medianTatHours === null ? 'trung bình' : 'trung vị ' + App.fmtHours(s.medianTatHours, true), 'var(--brand)']
         ];
         box.innerHTML = '<div class="row g-3">' + k.map(function (x) {
           return '<div class="col-6 col-lg"><div class="card kpi h-100"><div class="label">' + x[0] + '</div><div class="value" style="color:' + x[3] + '">' + x[1] + '</div><div class="sub">' + esc(x[2]) + '</div></div></div>';
@@ -139,7 +139,7 @@
             return '<tr data-id="' + o.OrderID + '"><td class="mono fw-semibold">' + o.OrderID + '</td><td>' + U.vnDate(o.OrderDate) + '</td>' +
               '<td><div class="fw-medium">' + esc(o.PatientName) + '</div><div class="small text-muted">' + esc([o.Gender, o.Age !== null ? o.Age + 't' : '', o.Phone].filter(String).join(' · ')) + '</div></td>' +
               '<td>' + U.chips(o.PanelCodes) + '</td><td class="small">' + esc(App.Users.names(o.AssignedTo) || '—') + '</td><td>' + U.badge(o.Status) + '</td>' +
-              '<td class="text-end small tabular">' + (o.CompletedAt ? U.vnDateTime(o.CompletedAt) + '<div class="text-muted">' + (o.TatHours !== null ? o.TatHours + ' giờ' : '') + '</div>' : '—') + '</td></tr>';
+              '<td class="text-end small tabular">' + (o.CompletedAt ? U.vnDateTime(o.CompletedAt) + '<div class="text-muted">' + (o.TatHours !== null ? App.fmtHours(o.TatHours) : '') + '</div>' : '—') + '</td></tr>';
           }).join('') + '</tbody></table></div>' : U.empty(st.status === 'PENDING' ? 'Không có phiếu chờ kết quả' : 'Không có phiếu', 'bi-check2-all');
       }).catch(function () { box.innerHTML = U.empty('Lỗi tải dữ liệu', 'bi-exclamation-triangle'); });
     }
@@ -246,7 +246,7 @@
           U.api('report.productivity', st, { silent: true }).then(function (pr) {
             var box = U.$('#r-prod', body);
             if (!box) return;
-            var m = !!pr.money, tat = function (v) { return v === null ? '—' : v + ' giờ'; };
+            var m = !!pr.money, tat = App.fmtHours;
             var moneyCells = function (net, pct, avg, paid, unpaid) {
               return m ? '<td class="text-end tabular fw-semibold">' + U.money(net) + '</td><td class="text-end tabular">' + (pct === '' ? '' : pct + '%') + '</td>' +
                 '<td class="text-end tabular">' + (avg === '' ? '' : U.money(avg)) + '</td><td class="text-end tabular text-success">' + U.money(paid) + '</td>' +

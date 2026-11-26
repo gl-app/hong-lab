@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.3.1',
+  VERSION: '2.3.2',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -4032,14 +4032,22 @@ var WorkService = {
       OrderID: o.OrderID, OrderDate: toDateStr_(o.OrderDate), PatientID: o.PatientID, PatientName: o.PatientName,
       Gender: o.Gender, Age: toNum_(o.Age), Phone: o.Phone, DoctorName: o.DoctorName, PanelCodes: o.PanelCodes,
       Status: o.Status, AssignedTo: o.AssignedTo ? String(o.AssignedTo).split(',') : [],
-      CreatedAt: o.CreatedAt, FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || '', TatHours: tat
+      CreatedAt: o.CreatedAt, FirstResultAt: o.FirstResultAt || '', CompletedAt: o.CompletedAt || '', TatHours: tat === null ? null : Math.round(tat * 100) / 100
     };
   },
 
   tatHours_: function (o) {
     if (!o.CompletedAt || !o.CreatedAt) return null;
     var a = WorkService.ts_(o.CreatedAt), b = WorkService.ts_(o.CompletedAt);
-    return (a && b && b >= a) ? Math.round((b - a) / 360000) / 10 : null;
+    return (a && b && b >= a) ? (b - a) / 3600000 : null;   // giờ, giữ nguyên phần lẻ – làm tròn ở kết quả cuối
+  },
+
+  /** Trung bình + trung vị thời gian trả KQ (giờ, 2 số lẻ). Số phiếu chẵn → trung vị = TB 2 giá trị giữa. */
+  tatStats_: function (arr) {
+    if (!arr.length) return { avg: null, median: null };
+    var t = arr.slice().sort(function (a, b) { return a - b; }), n = t.length;
+    var r2 = function (v) { return Math.round(v * 100) / 100; };
+    return { avg: r2(t.reduce(function (a, b) { return a + b; }, 0) / n), median: r2(n % 2 ? t[(n - 1) / 2] : (t[n / 2 - 1] + t[n / 2]) / 2) };
   },
 
   ts_: function (s) {
@@ -4105,8 +4113,8 @@ var WorkService = {
       String(o.PanelCodes || '').split(',').filter(String).forEach(function (pc) { byPanel[pc] = (byPanel[pc] || 0) + 1; });
     });
     tats.sort(function (a, b) { return a - b; });
-    s.avgTatHours = tats.length ? Math.round(tats.reduce(function (a, b) { return a + b; }, 0) / tats.length * 10) / 10 : null;
-    s.medianTatHours = tats.length ? tats[Math.floor(tats.length / 2)] : null;
+    var st = WorkService.tatStats_(tats);
+    s.avgTatHours = st.avg; s.medianTatHours = st.median;
     s.completionRate = s.total ? Math.round(s.completed / s.total * 1000) / 10 : 0;
     var pm = Catalog.panelMap();
     return {
@@ -4156,8 +4164,7 @@ var WorkService = {
     var rows = Object.keys(stat).map(function (k) {
       var s = stat[k], t = s.tats.slice().sort(function (a, b) { return a - b; });
       var r = { username: s.username, fullName: s.fullName, assigned: s.assigned, completed: s.completed, pending: s.pending,
-               avgTatHours: t.length ? Math.round(t.reduce(function (a, b) { return a + b; }, 0) / t.length * 10) / 10 : null,
-               medianTatHours: t.length ? t[Math.floor(t.length / 2)] : null };
+               avgTatHours: WorkService.tatStats_(t).avg, medianTatHours: WorkService.tatStats_(t).median };
       if (money) {
         r.net = Math.round(s.net); r.paid = Math.round(s.paid); r.unpaid = r.net - r.paid; r.shared = s.shared;
         r.avgPerOrder = s.assigned ? Math.round(s.net / s.assigned) : 0;

@@ -4,6 +4,11 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.2 (2026-11-26) — Thời gian trả KQ có số lẻ
+- TB trả KQ / Trung vị (Thống kê, Việc của tôi): hiện 2 số lẻ kiểu Việt Nam (VD 0,58 giờ); di chuột xem "0 giờ 35 phút".
+- Tính trên thời gian thực từng phiếu (trước đây mỗi phiếu đã làm tròn 0,1 giờ → phiếu trả nhanh thành 0). Trung vị với số phiếu chẵn = trung bình 2 giá trị giữa.
+- Cần dán `LIS_Code.gs` + Deploy → New version.
+
 ## v2.3.1 (2026-11-26) — Doanh thu theo nhân viên
 - Thống kê → bảng "Năng suất & doanh thu theo nhân viên phụ trách": thêm Doanh thu, % tổng, TB / phiếu, Đã thu, Chưa thu cho từng nhân viên; dòng "Chưa phân công" và "Tổng kỳ".
 - Doanh thu = thành tiền sau chiết khấu của phiếu không hủy. Phiếu giao cho nhiều người được chia đều (ghi chú "(n chung)") → cộng các dòng + chưa phân công = đúng tổng doanh thu kỳ.

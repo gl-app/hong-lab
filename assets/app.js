@@ -189,7 +189,15 @@
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }),
              off: off.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.3.1';
+  App.FE_VERSION = '2.3.2';
+  /** Giờ có 2 số lẻ kiểu VN (0,58 giờ); di chuột xem giờ:phút. plain = chỉ chữ (không thẻ HTML). */
+  App.fmtHours = function (v, plain) {
+    if (v === null || v === undefined || v === '') return '—';
+    var txt = Number(v).toLocaleString('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' giờ';
+    if (plain) return txt;
+    var mins = Math.round(Number(v) * 60);
+    return '<span title="' + Math.floor(mins / 60) + ' giờ ' + (mins % 60) + ' phút">' + txt + '</span>';
+  };
   /**
    * Khoảng tham chiếu để in: mặc định dùng bản danh mục hiện tại (đã chỉnh xuống dòng, đơn vị…).
    * Chỉ giữ bản lưu kèm kết quả khi CÁC CON SỐ khác nhau (ngưỡng đã đổi sau khi làm XN → in đúng ngưỡng lúc đó).
