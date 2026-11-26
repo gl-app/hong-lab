@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.3.0',
+  VERSION: '2.3.1',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -235,7 +235,7 @@ var ROUTES = {
   'work.list':             { fn: function (p, c) { return WorkService.list(p, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
   'work.summary':          { fn: function (p, c) { return WorkService.summary(p, c); }, perm: PERM.ORDER_VIEW + '|' + PERM.RESULT_ENTER },
   'work.export':           { fn: function (p, c) { return WorkService.exportData(p, c); }, perm: PERM.WORK_EXPORT + '|' + PERM.ADMIN_USERS },
-  'report.productivity':   { fn: function (p) { return WorkService.productivity(p); }, perm: PERM.REPORT_REVENUE + '|' + PERM.ADMIN_USERS },
+  'report.productivity':   { fn: function (p, c) { return WorkService.productivity(p, c); }, perm: PERM.REPORT_REVENUE + '|' + PERM.ADMIN_USERS },
 
   'history.byPatient':     { fn: function (p) { return HistoryService.byPatient(p); }, perm: PERM.HISTORY_VIEW },
 
@@ -4118,13 +4118,20 @@ var WorkService = {
   },
 
   /** Báo cáo năng suất theo nhân viên. p: { from, to } */
-  productivity: function (p) {
+  /**
+   * Năng suất + doanh thu theo nhân viên phụ trách (AssignedTo).
+   *  Doanh thu = Thành tiền sau chiết khấu (NetAmount) của phiếu không hủy. Phiếu giao cho nhiều người → chia đều
+   *  → cộng các dòng + "chưa phân công" = đúng tổng doanh thu của báo cáo (không đếm trùng).
+   *  Chỉ trả số tiền khi người xem có quyền xem doanh thu.
+   */
+  productivity: function (p, ctx) {
+    var money = !ctx || Auth.hasPerm(ctx, PERM.REPORT_REVENUE);
     var to = toDateStr_(p.to) || todayStr_();
     var from = toDateStr_(p.from) || (to.substring(0, 8) + '01');
     var users = {};
     WorkService.userOptions().forEach(function (u) { users[u.Username] = u.FullName; });
     var stat = {};
-    var unassigned = 0;
+    var unassigned = 0, un = { net: 0, paid: 0 }, tot = { net: 0, paid: 0, orders: 0 };
     YearDb.idsInRange(from, to).forEach(function (db) {
       var all;
       try { all = Db.readAll(T.ORDERS, db); } catch (e) { return; }
@@ -4132,11 +4139,15 @@ var WorkService = {
         var d = toDateStr_(o.OrderDate);
         if (d < from || d > to || o.Status === ENUM.ORDER_STATUS.CANCELLED) return;
         var asg = o.AssignedTo ? String(o.AssignedTo).split(',').filter(String) : [];
-        if (!asg.length) { unassigned++; return; }
-        var tat = WorkService.tatHours_(o);
+        var net = toNum_(o.NetAmount, 0), paid = o.PaymentStatus === ENUM.PAYMENT.PAID ? net : 0;
+        tot.orders++; tot.net += net; tot.paid += paid;
+        if (!asg.length) { unassigned++; un.net += net; un.paid += paid; return; }
+        var tat = WorkService.tatHours_(o), share = 1 / asg.length;
         asg.forEach(function (u) {
-          var s = stat[u] = stat[u] || { username: u, fullName: users[u] || u, assigned: 0, completed: 0, pending: 0, tats: [] };
+          var s = stat[u] = stat[u] || { username: u, fullName: users[u] || u, assigned: 0, completed: 0, pending: 0, tats: [], net: 0, paid: 0, shared: 0 };
           s.assigned++;
+          s.net += net * share; s.paid += paid * share;
+          if (asg.length > 1) s.shared++;
           if (o.Status === ENUM.ORDER_STATUS.COMPLETED) s.completed++; else s.pending++;
           if (tat !== null) s.tats.push(tat);
         });
@@ -4144,11 +4155,22 @@ var WorkService = {
     });
     var rows = Object.keys(stat).map(function (k) {
       var s = stat[k], t = s.tats.slice().sort(function (a, b) { return a - b; });
-      return { username: s.username, fullName: s.fullName, assigned: s.assigned, completed: s.completed, pending: s.pending,
+      var r = { username: s.username, fullName: s.fullName, assigned: s.assigned, completed: s.completed, pending: s.pending,
                avgTatHours: t.length ? Math.round(t.reduce(function (a, b) { return a + b; }, 0) / t.length * 10) / 10 : null,
                medianTatHours: t.length ? t[Math.floor(t.length / 2)] : null };
-    }).sort(function (a, b) { return b.assigned - a.assigned; });
-    return { from: from, to: to, rows: rows, unassigned: unassigned };
+      if (money) {
+        r.net = Math.round(s.net); r.paid = Math.round(s.paid); r.unpaid = r.net - r.paid; r.shared = s.shared;
+        r.avgPerOrder = s.assigned ? Math.round(s.net / s.assigned) : 0;
+        r.pct = tot.net ? Math.round(s.net / tot.net * 1000) / 10 : 0;
+      }
+      return r;
+    }).sort(function (a, b) { return money ? (b.net - a.net) || (b.assigned - a.assigned) : b.assigned - a.assigned; });
+    var out = { from: from, to: to, rows: rows, unassigned: unassigned, money: money };
+    if (money) {
+      out.unassignedNet = Math.round(un.net); out.unassignedPaid = Math.round(un.paid);
+      out.totalNet = Math.round(tot.net); out.totalPaid = Math.round(tot.paid); out.totalOrders = tot.orders;
+    }
+    return out;
   }
 };
 

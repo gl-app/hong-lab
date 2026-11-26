@@ -241,17 +241,34 @@
               }).join('') : '<tr><td colspan="5">' + U.empty('Không có dữ liệu') + '</td></tr>';
             })() + '</tbody></table></div></div></div></div>';
         if (App.can('report.revenue|*')) {
-          body.insertAdjacentHTML('beforeend', '<div class="card mt-3"><div class="card-header">Năng suất theo nhân viên phụ trách <span class="small text-muted fw-normal ms-2">(thời gian trả KQ = tạo phiếu → hoàn tất)</span></div><div id="r-prod">' +
+          body.insertAdjacentHTML('beforeend', '<div class="card mt-3"><div class="card-header">Năng suất ' + (App.can('report.revenue') ? '&amp; doanh thu ' : '') + 'theo nhân viên phụ trách <span class="small text-muted fw-normal ms-2">(thời gian trả KQ = tạo phiếu → hoàn tất)</span></div><div id="r-prod">' +
             '<div class="empty"><div class="spinner-border text-secondary"></div></div></div></div>');
           U.api('report.productivity', st, { silent: true }).then(function (pr) {
             var box = U.$('#r-prod', body);
             if (!box) return;
-            box.innerHTML = pr.rows.length ? '<div class="table-wrap"><table class="table table-sm"><thead><tr><th>Nhân viên</th><th class="text-end">Được giao</th><th class="text-end">Hoàn tất</th><th class="text-end">Đang chờ</th><th class="text-end">TB trả KQ</th><th class="text-end">Trung vị</th></tr></thead><tbody>' +
+            var m = !!pr.money, tat = function (v) { return v === null ? '—' : v + ' giờ'; };
+            var moneyCells = function (net, pct, avg, paid, unpaid) {
+              return m ? '<td class="text-end tabular fw-semibold">' + U.money(net) + '</td><td class="text-end tabular">' + (pct === '' ? '' : pct + '%') + '</td>' +
+                '<td class="text-end tabular">' + (avg === '' ? '' : U.money(avg)) + '</td><td class="text-end tabular text-success">' + U.money(paid) + '</td>' +
+                '<td class="text-end tabular' + (unpaid > 0 ? ' text-danger' : ' text-muted') + '">' + U.money(unpaid) + '</td>' : '';
+            };
+            if (!pr.rows.length) { box.innerHTML = U.empty('Chưa có phiếu được phân công trong kỳ (' + pr.unassigned + ' phiếu chưa phân công)', 'bi-people'); return; }
+            var anyShared = pr.rows.some(function (x) { return x.shared > 0; });
+            box.innerHTML = '<div class="table-wrap"><table class="table table-sm"><thead><tr><th>Nhân viên</th><th class="text-end">Được giao</th><th class="text-end">Hoàn tất</th><th class="text-end">Đang chờ</th><th class="text-end">TB trả KQ</th><th class="text-end">Trung vị</th>' +
+              (m ? '<th class="text-end" title="Thành tiền sau chiết khấu, phiếu không hủy. Phiếu giao nhiều người → chia đều">Doanh thu</th><th class="text-end">% tổng</th><th class="text-end">TB / phiếu</th><th class="text-end">Đã thu</th><th class="text-end">Chưa thu</th>' : '') + '</tr></thead><tbody>' +
               pr.rows.map(function (x) {
-                return '<tr><td>' + esc(x.fullName) + ' <span class="small text-muted mono">' + esc(x.username) + '</span></td><td class="text-end tabular">' + x.assigned + '</td><td class="text-end tabular">' + x.completed + '</td>' +
-                  '<td class="text-end tabular">' + x.pending + '</td><td class="text-end tabular">' + (x.avgTatHours === null ? '—' : x.avgTatHours + ' giờ') + '</td><td class="text-end tabular">' + (x.medianTatHours === null ? '—' : x.medianTatHours + ' giờ') + '</td></tr>';
-              }).join('') + '</tbody></table></div><div class="small text-muted px-3 py-2">' + pr.unassigned + ' phiếu chưa phân công trong kỳ.</div>'
-              : U.empty('Chưa có phiếu được phân công trong kỳ (' + pr.unassigned + ' phiếu chưa phân công)', 'bi-people');
+                return '<tr><td>' + esc(x.fullName) + ' <span class="small text-muted mono">' + esc(x.username) + '</span>' + (m && x.shared ? ' <span class="small text-muted" title="' + x.shared + ' phiếu giao chung nhiều người – doanh thu chia đều">(' + x.shared + ' chung)</span>' : '') + '</td>' +
+                  '<td class="text-end tabular">' + x.assigned + '</td><td class="text-end tabular">' + x.completed + '</td><td class="text-end tabular">' + x.pending + '</td>' +
+                  '<td class="text-end tabular">' + tat(x.avgTatHours) + '</td><td class="text-end tabular">' + tat(x.medianTatHours) + '</td>' +
+                  moneyCells(x.net, x.pct, x.avgPerOrder, x.paid, x.unpaid) + '</tr>';
+              }).join('') + '</tbody>' +
+              (m ? '<tfoot>' +
+                (pr.unassigned ? '<tr class="text-muted"><td>Chưa phân công</td><td class="text-end tabular">' + pr.unassigned + '</td><td colspan="4"></td>' +
+                  moneyCells(pr.unassignedNet, pr.totalNet ? Math.round(pr.unassignedNet / pr.totalNet * 1000) / 10 : 0, pr.unassigned ? Math.round(pr.unassignedNet / pr.unassigned) : 0, pr.unassignedPaid, pr.unassignedNet - pr.unassignedPaid) + '</tr>' : '') +
+                '<tr class="fw-bold"><td>Tổng kỳ</td><td class="text-end tabular">' + pr.totalOrders + '</td><td colspan="4" class="small text-muted fw-normal">số phiếu không hủy</td>' +
+                  moneyCells(pr.totalNet, 100, pr.totalOrders ? Math.round(pr.totalNet / pr.totalOrders) : 0, pr.totalPaid, pr.totalNet - pr.totalPaid) + '</tr></tfoot>' : '') +
+              '</table></div><div class="small text-muted px-3 py-2">' + pr.unassigned + ' phiếu chưa phân công trong kỳ.' +
+              (m ? ' Doanh thu = thành tiền sau chiết khấu của phiếu không hủy' + (anyShared ? '; phiếu giao cho nhiều người được chia đều' : '') + ' → cộng các dòng + chưa phân công = tổng kỳ.' : '') + '</div>';
           }).catch(function () {});
         }
         if (window.Chart && r.byDay.length) {

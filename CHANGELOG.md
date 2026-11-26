@@ -4,6 +4,12 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.1 (2026-11-26) — Doanh thu theo nhân viên
+- Thống kê → bảng "Năng suất & doanh thu theo nhân viên phụ trách": thêm Doanh thu, % tổng, TB / phiếu, Đã thu, Chưa thu cho từng nhân viên; dòng "Chưa phân công" và "Tổng kỳ".
+- Doanh thu = thành tiền sau chiết khấu của phiếu không hủy. Phiếu giao cho nhiều người được chia đều (ghi chú "(n chung)") → cộng các dòng + chưa phân công = đúng tổng doanh thu kỳ.
+- Cột tiền chỉ hiện với tài khoản có quyền xem doanh thu.
+- Cần dán `LIS_Code.gs` + Deploy → New version.
+
 ## v2.3.0 (2026-11-26) — Ngắt kết nối DB năm + tối ưu đọc/ghi
 - Quản trị → Kết nối dữ liệu năm: nút **Ngắt kết nối** cho DB các năm trước (trạng thái mới "Ngắt kết nối"). DB đã ngắt không bao giờ bị mở: tra cứu, lịch sử chỉ số, thống kê, chỉ mục lần khám, setup, đo dung lượng đều bỏ qua. File và dữ liệu giữ nguyên; **Kết nối lại** (về Khóa sổ) là dùng ngay, không cần dựng lại chỉ mục.
   - Lần khám cũ vẫn giữ trong hồ sơ BN → tính tái khám (chiết khấu) vẫn đúng.
