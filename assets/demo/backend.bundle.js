@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.2.0',
+  VERSION: '2.2.1',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -71,7 +71,7 @@ SCHEMA[T.ROLES]       = ['RoleCode', 'RoleName', 'Permissions', 'IsSystem'];
 SCHEMA[T.USERS]       = ['Username', 'FullName', 'RoleCode', 'PasswordHash', 'Salt', 'IsActive',
                          'MustChangePassword', 'LastLoginAt', 'CreatedAt', 'UpdatedAt'];
 SCHEMA[T.PANELS]      = ['PanelCode', 'PanelName', 'PrintTitle', 'PrintSubtitle', 'PricingMode', 'Price',
-                         'SortOrder', 'IsActive', 'TemplateDocId', 'PageSize', 'PrintNote'];
+                         'SortOrder', 'IsActive', 'TemplateDocId', 'PageSize', 'PrintNote', 'PrintBlankMM'];
 SCHEMA[T.TESTS]       = ['TestCode', 'TestName', 'Unit', 'ResultType', 'RefMinM', 'RefMaxM', 'RefMinF',
                          'RefMaxF', 'RefText', 'Price', 'SortOrder', 'IsActive', 'LegacyName', 'Formula'];
 SCHEMA[T.PANEL_TESTS] = ['PanelCode', 'TestCode', 'SortOrder'];
@@ -1615,7 +1615,7 @@ var Catalog = {
         PanelCode: String(r.PanelCode).trim(), PanelName: r.PanelName, PrintTitle: r.PrintTitle,
         PrintSubtitle: r.PrintSubtitle, PricingMode: String(r.PricingMode || 'TEST').toUpperCase(),
         Price: toNum_(r.Price, 0), SortOrder: toNum_(r.SortOrder, 999), IsActive: toBool_(r.IsActive),
-        TemplateDocId: r.TemplateDocId || '', PrintNote: String(r.PrintNote || ''),
+        TemplateDocId: r.TemplateDocId || '', PrintNote: String(r.PrintNote || ''), PrintBlankMM: Math.max(0, Math.min(200, toNum_(r.PrintBlankMM, 0))),
         PageSize: /^A[45]$/.test(String(r.PageSize || '').toUpperCase().trim()) ? String(r.PageSize).toUpperCase().trim() : ''   // '' = theo cấu hình chung
       };
     }).sort(function (a, b) { return a.SortOrder - b.SortOrder; });
@@ -2894,7 +2894,8 @@ var PrintService = {
       // Khổ giấy: theo từng nhóm (Panels.PageSize), trống = cấu hình chung. 1 file Google Docs chỉ có 1 khổ →
       // nếu in chung nhiều nhóm khác khổ thì dùng A4 (khổ lớn hơn) cho cả file.
       var defSize = String(settings.PRINT_PAGE_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5';
-      var sizeKey = panels.some(function (op) { return ((pm[op.PanelCode] || {}).PageSize || defSize) === 'A4'; }) ? 'A4' : 'A5';
+      var blankOf = function (op) { return Number((pm[op.PanelCode] || {}).PrintBlankMM) || 0; };
+      var sizeKey = panels.some(function (op) { return blankOf(op) > 0 || ((pm[op.PanelCode] || {}).PageSize || defSize) === 'A4'; }) ? 'A4' : 'A5';
       var size = PrintService.PAGE[sizeKey];
       body.setPageWidth(size[0]).setPageHeight(size[1])
           .setMarginTop(24).setMarginBottom(20).setMarginLeft(28).setMarginRight(24);
@@ -2907,7 +2908,7 @@ var PrintService = {
         var startIdx = body.getNumChildren();
         var anchor = panel.TemplateDocId ? (PrintService.appendTemplate_(body, panel.TemplateDocId), PrintService.firstParagraphFrom_(body, startIdx))
                                          : PrintService.appendStandard_(body, data, op, panel, settings, logo, size);
-        if (watermark && anchor) PrintService.addWatermark_(anchor, watermark, size);
+        if (watermark && anchor && !(Number(panel.PrintBlankMM) > 0)) PrintService.addWatermark_(anchor, watermark, size);   // chừa trống cho máy XN → không in hình chìm
       });
       PrintService.replacePlaceholders_(body, data, settings);
       // Remove the default empty first paragraph created by DocumentApp.create
@@ -2947,17 +2948,35 @@ var PrintService = {
     var A4 = size[0] > 500;
     // Mật độ: gói nhiều chỉ số → thu nhỏ chữ/đệm để chữ ký + tên Trưởng phòng luôn nằm cùng trang 1
     var nRows = PrintService.countRows_(data, op, settings);
+    var blankMM = Number(panel.PrintBlankMM) || 0;   // chừa trống cho máy xét nghiệm in biểu đồ (giữ nguyên, không co)
     var fitRows = A4 ? 22 : 9;
     var d = nRows <= fitRows ? 1 : Math.max(0.74, 1 - (nRows - fitRows) * (A4 ? 0.015 : 0.035));
+    if (blankMM > 0) {
+      var spaceMM = 281 - 18 - 12 - blankMM - 37;           // phần còn lại cho bảng kết quả (A4, trừ đầu phiếu, tiêu đề, chữ ký)
+      d = Math.min(1, Math.max(0.62, spaceMM / ((nRows + 1) * 7.5)));
+    }
     var fs = function (n) { return Math.max(6, Math.round((A4 ? n + 1 : n) * d * 2) / 2); };   // cỡ chữ theo khổ giấy × mật độ
     var pd = function (n) { return Math.max(1, Math.round(n * d * 2) / 2); };
 
     // ---- Header: logo | tên phòng XN, giấy phép · địa chỉ, điện thoại
-    var head = body.appendTable([['', '']]);
+    var head = body.appendTable([blankMM > 0 ? ['', '', ''] : ['', '']]);
     head.setBorderWidth(0);
     var hl = head.getCell(0, 0), hr = head.getCell(0, 1);
     hl.setWidth(62).setPaddingTop(0).setPaddingLeft(0).setPaddingBottom(4);
-    hr.setWidth(contentW - 62).setPaddingTop(2).setPaddingBottom(4);
+    hr.setWidth(blankMM > 0 ? contentW * 0.5 - 62 : contentW - 62).setPaddingTop(2).setPaddingBottom(4);
+    if (blankMM > 0) {
+      // Thông tin BN gọn bên phải đầu phiếu → không chiếm khoảng trống dành cho máy XN
+      var pc = head.getCell(0, 2).setWidth(contentW * 0.5).setPaddingTop(1).setPaddingBottom(4).setPaddingLeft(8);
+      var lines = [['Họ và tên: ', o.PatientName, true],
+                   ['Tuổi: ', (o.Age === null ? '' : o.Age) + '   ·   Giới tính: ' + (o.Gender || '') + '   ·   Mã BN: ' + o.PatientID, false],
+                   ['Ngày khám: ', PrintService.vnDate_(o.OrderDate) + '   ·   BS: ' + (o.DoctorName || ''), false],
+                   ['Địa chỉ: ', o.Address || '', false]];
+      lines.forEach(function (l, li) {
+        var pp = li === 0 ? pc.getChild(0).asParagraph() : pc.appendParagraph('');
+        PrintService.para_(pp, l[0] + l[1], li === 0 ? fs(10) : fs(8), false, C.text);
+        if (l[1]) pp.editAsText().setBold(l[0].length, (l[0] + l[1]).length - 1, l[2] || li < 3);
+      });
+    }
     if (logo) {
       try {
         var img = hl.getChild(0).asParagraph().appendInlineImage(logo);
@@ -2985,12 +3004,22 @@ var PrintService = {
     }
     PrintService.para_(body.appendParagraph(''), ' ', 3, false, C.muted);
 
-    // ---- Thông tin bệnh nhân (khung nền nhạt)
-    var info = body.appendTable([
+    if (blankMM > 0) {
+      // ---- Khoảng trống cố định cho máy xét nghiệm in biểu đồ / bảng số liệu (không co theo mật độ)
+      var gap = body.appendTable([['']]);
+      gap.setBorderWidth(0);
+      gap.getRow(0).setMinimumHeight(blankMM * 2.8346);
+      gap.getCell(0, 0).setWidth(contentW).setPaddingTop(0).setPaddingBottom(0);
+      PrintService.styleText_(gap.getCell(0, 0).getChild(0).asParagraph(), 2, false, C.muted);
+    }
+
+    // ---- Thông tin bệnh nhân (khung nền nhạt) – chế độ chừa trống: đã in ở đầu phiếu
+    var info = blankMM > 0 ? null : body.appendTable([
       ['Họ và tên: ' + o.PatientName, 'Tuổi: ' + (o.Age === null ? '' : o.Age) + '      Giới tính: ' + (o.Gender || '')],
       ['Mã BN: ' + o.PatientID, 'Ngày khám: ' + PrintService.vnDate_(o.OrderDate)],
       ['Địa chỉ: ' + (o.Address || ''), 'BS chỉ định: ' + (o.DoctorName || '')]
     ]);
+    if (info) {
     info.setBorderColor('#D5E2E5').setBorderWidth(0.5);
     for (var r = 0; r < 3; r++) {
       for (var c = 0; c < 2; c++) {
@@ -3005,6 +3034,7 @@ var PrintService = {
     }
     info.getCell(0, 0).setWidth(contentW * 0.6);
     info.getCell(0, 1).setWidth(contentW * 0.4);
+    }
     PrintService.para_(body.appendParagraph(''), ' ', 4, false, C.muted);
 
     // ---- Bảng kết quả
@@ -3607,7 +3637,8 @@ var AdminService = {
         PrintSubtitle: panel.PrintSubtitle || '', SortOrder: toNum_(panel.SortOrder, 999),
         IsActive: panel.IsActive === undefined ? true : toBool_(panel.IsActive), TemplateDocId: panel.TemplateDocId || '',
         PageSize: /^A[45]$/.test(String(panel.PageSize || '').toUpperCase()) ? String(panel.PageSize).toUpperCase() : '',
-        PrintNote: String(panel.PrintNote || '').replace(/\r\n?/g, '\n').split('\n').map(function (l) { return l.trim(); }).filter(String).join('\n')   // ghi chú in nghiêng cạnh chữ ký
+        PrintNote: String(panel.PrintNote || '').replace(/\r\n?/g, '\n').split('\n').map(function (l) { return l.trim(); }).filter(String).join('\n'),   // ghi chú in nghiêng cạnh chữ ký
+        PrintBlankMM: Math.max(0, Math.min(200, Math.round(toNum_(panel.PrintBlankMM, 0))))   // chừa trống (mm) cho máy XN in biểu đồ
       };
       Db.ensureSheet(Db.sheet(T.PANELS, null).getParent(), T.PANELS);   // bản cũ chưa có cột PrintNote → tự thêm (không cần chạy setup)
       // Cách tính giá & giá nhóm chỉ đổi khi có quyền Bảng giá

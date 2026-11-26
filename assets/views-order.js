@@ -890,11 +890,13 @@
     var od = o.OrderDate.split('-');
     var now = new Date();
     var logo = s.CLINIC_LOGO_DATA || s.CLINIC_LOGO_URL || '';
-    var wmOn = logo && String(s.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE';
+    var wmOn = logo && String(s.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' &&
+      !codes.some(function (c) { return Number((App.panel(c) || {}).PrintBlankMM) > 0; });   // chừa trống cho máy XN → không in hình chìm
     var wmOp = Math.min(0.3, Math.max(0.03, Number(s.WATERMARK_OPACITY) || 0.08));
     var pages = codes.map(function (code) {
       var p = App.panel(code) || { PanelName: code, PrintTitle: 'PHIẾU KẾT QUẢ XÉT NGHIỆM' };
-      var psz = p.PageSize === 'A4' || p.PageSize === 'A5' ? p.PageSize : size;
+      var blank = Number(p.PrintBlankMM) || 0;   // chừa trống (mm) cho máy XN in biểu đồ – luôn A4, giữ nguyên kích thước
+      var psz = blank > 0 ? 'A4' : (p.PageSize === 'A4' || p.PageSize === 'A5' ? p.PageSize : size);
       if (!firstSize) firstSize = psz;
       var op = data.panels.filter(function (x) { return x.PanelCode === code; })[0] || { TestCodes: [] };
       var res = {};
@@ -911,16 +913,21 @@
         return '<tr><td class="c mu">' + (i + 1) + '</td><td class="tn">' + esc(t.TestName) + '</td><td class="c rv' + (ab ? ' ab' : '') + '">' + esc(r.Value || '') + mark + '</td>' +
           '<td class="c mu">' + esc(t.Unit || '') + '</td><td class="rf">' + U.ml(App.refText(r.RefText, t, o.Gender)) + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="c mu" style="padding:10px">(Chưa có kết quả)</td></tr>';
-      return '<section class="page sz-' + psz.toLowerCase() + '" data-sz="' + psz + '">' +
+      var pbox = blank > 0 ? '<div class="pbox"><div class="pb1">Họ và tên: <b>' + esc(o.PatientName) + '</b></div>' +
+          '<div>Tuổi: <b>' + (o.Age === null ? '' : o.Age) + '</b> · Giới tính: <b>' + esc(o.Gender || '') + '</b> · Mã BN: <b class="mono">' + esc(o.PatientID) + '</b></div>' +
+          '<div>Ngày khám: <b>' + U.vnDate(o.OrderDate) + '</b> · BS: <b>' + esc(o.DoctorName || '') + '</b></div>' +
+          '<div class="ell">Địa chỉ: ' + esc(o.Address || '') + '</div></div>' : '';
+      return '<section class="page sz-' + psz.toLowerCase() + (blank > 0 ? ' has-blank' : '') + '" data-sz="' + psz + '">' +
         '<header><div class="logo">' + (logo ? '<img src="' + esc(logo) + '" alt="">' : '') + '</div><div class="org">' +
           '<div class="cn">' + esc(s.CLINIC_NAME || '') + '</div>' +
           '<div class="ci">' + esc([s.CLINIC_LICENSE, s.CLINIC_ADDRESS].filter(Boolean).join(' · ')) + '</div>' +
-          '<div class="ci">' + (s.CLINIC_PHONE ? 'Điện thoại: ' + esc(s.CLINIC_PHONE) : '') + '</div></div></header>' +
+          '<div class="ci">' + (s.CLINIC_PHONE ? 'Điện thoại: ' + esc(s.CLINIC_PHONE) : '') + '</div></div>' + pbox + '</header>' +
         '<div class="ttl"><h1>' + esc(p.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM') + '</h1>' + (p.PrintSubtitle ? '<h2>' + esc(p.PrintSubtitle) + '</h2>' : '') + '</div>' +
-        '<table class="info"><tr><td class="w60">Họ và tên: <b class="pn">' + esc(o.PatientName) + '</b></td><td>Tuổi: <b>' + (o.Age === null ? '' : o.Age) + '</b>' +
+        (blank > 0 ? '<div class="blank" style="height:' + blank + 'mm"></div>' : '') +
+        (blank > 0 ? '' : '<table class="info"><tr><td class="w60">Họ và tên: <b class="pn">' + esc(o.PatientName) + '</b></td><td>Tuổi: <b>' + (o.Age === null ? '' : o.Age) + '</b>' +
           '<span class="sp"></span>Giới tính: <b>' + esc(o.Gender || '') + '</b></td></tr>' +
           '<tr><td>Mã BN: <b class="mono">' + esc(o.PatientID) + '</b></td><td>Ngày khám: <b>' + U.vnDate(o.OrderDate) + '</b></td></tr>' +
-          '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>' +
+          '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>') +
         '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
           rowsHtml + '</tbody></table>' +
         (anyAbn ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
@@ -940,6 +947,8 @@
       'header{display:flex;gap:10px;align-items:center;padding-bottom:6px;border-bottom:2px solid #0f4c5c}' +
       '.logo img{height:46px;width:auto;display:block}.org{flex:1}.cn{font-weight:700;color:#0f4c5c;font-size:1.25em;letter-spacing:.02em}' +
       '.ci{font-size:.8em;color:#5f6b7a}' +
+      '.pbox{width:50%;font-size:.8em;line-height:1.45;border-left:1px solid #d5e2e5;padding-left:10px}.pb1{font-size:1.15em}.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+      '.blank{flex:none}' +
       '.ttl{text-align:center;margin:.75em 0 .6em}h1{color:#0f4c5c;font-size:1.32em;margin:0;letter-spacing:.03em}h2{color:#0f4c5c;font-size:1.08em;margin:1px 0 0;font-weight:700}' +
       'table{width:100%;border-collapse:collapse}' +
       '.info{background:rgba(15,76,92,.05);border:1px solid #d5e2e5;border-radius:4px;margin-bottom:.6em}.info td{padding:.25em .65em;vertical-align:top}.w60{width:60%}' +
@@ -968,7 +977,8 @@
         var maxH = Math.floor((cfg.h - 16) * 96 / 25.4) - 6;   // chiều cao vùng in (px)
         var basePt = cfg.base;
         var k = 1;
-        while (pg.scrollHeight > maxH && k > 0.7) { k = Math.round((k - 0.03) * 100) / 100; pg.style.fontSize = (basePt * k).toFixed(2) + 'pt'; }
+        var kMin = pg.classList.contains('has-blank') ? 0.6 : 0.7;   // khoảng trống tính bằng mm → không co, chỉ co chữ
+        while (pg.scrollHeight > maxH && k > kMin) { k = Math.round((k - 0.03) * 100) / 100; pg.style.fontSize = (basePt * k).toFixed(2) + 'pt'; }
       });
     };
     var printed = false;
