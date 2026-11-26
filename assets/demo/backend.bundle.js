@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.2.1',
+  VERSION: '2.2.2',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };

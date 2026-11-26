@@ -187,7 +187,7 @@
     });
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.2.1';
+  App.FE_VERSION = '2.2.2';
   /**
    * Khoảng tham chiếu để in: mặc định dùng bản danh mục hiện tại (đã chỉnh xuống dòng, đơn vị…).
    * Chỉ giữ bản lưu kèm kết quả khi CÁC CON SỐ khác nhau (ngưỡng đã đổi sau khi làm XN → in đúng ngưỡng lúc đó).
@@ -507,7 +507,8 @@
     });
     U.$$('[data-clinic-name]').forEach(function (el) { el.textContent = name; });
     U.$$('[data-clinic-address]').forEach(function (el) { el.textContent = s.CLINIC_ADDRESS || ''; });
-    U.$$('[data-app-version]').forEach(function (el) { el.textContent = s.APP_VERSION ? 'v' + s.APP_VERSION : ''; });
+    var lv = document.getElementById('login-ver');
+    if (lv) lv.textContent = 'Phiên bản ' + App.FE_VERSION;   // màn đăng nhập: phiên bản giao diện
     document.title = 'LIS – ' + name;
     // Màn đăng nhập: ảnh nền (LOGIN_BG_URL, trống = ảnh mặc định) + độ mờ lớp phủ (LOGIN_BG_DIM 0–0.8)
     var bg = document.getElementById('login-bg'), dim = document.getElementById('login-dim');
@@ -540,6 +541,11 @@
     document.getElementById('demo-banner').classList.toggle('d-none', !Api.isDemo);
     document.getElementById('user-name').textContent = boot.user.fullName;
     document.getElementById('user-role').textContent = boot.user.roleName + ' · ' + boot.user.username;
+    // Phiên bản ở góc dưới thanh bên: khớp → 1 số; giao diện (GitHub) ≠ máy chủ (Apps Script) → hiện cả 2 màu vàng (cập nhật thiếu bước)
+    var sv = String((boot.settings || {}).APP_VERSION || '');
+    document.getElementById('app-ver').innerHTML = sv === App.FE_VERSION ? 'Phiên bản ' + U.esc(App.FE_VERSION) :
+      '<span class="ver-warn" title="Giao diện và Apps Script khác phiên bản – dán LIS_Code.gs mới + Deploy New version, upload đủ file giao diện, Ctrl+F5">Giao diện v' +
+      U.esc(App.FE_VERSION) + ' · Máy chủ v' + U.esc(sv || '?') + '</span>';
     document.getElementById('today-label').textContent = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
     document.getElementById('nav').innerHTML = boot.menu.map(function (m) {
       return '<a class="nav-link" href="#/' + m.key + '" data-key="' + m.key + '"><i class="bi ' + m.icon + '"></i><span>' + U.esc(m.label) + '</span>' +

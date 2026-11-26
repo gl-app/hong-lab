@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="assets/styles.css?v=2.2.1">
+  <link rel="stylesheet" href="assets/styles.css?v=2.2.2">
 </head>
 <body>
   <div id="loading-bar"></div>
@@ -45,7 +45,7 @@
         </div>
         <div class="alert alert-danger py-2 small d-none mb-0" id="login-error"></div>
         <button class="lc-submit" type="submit" id="login-btn">Đăng nhập</button>
-        <div class="lc-foot">LIS <span data-app-version></span></div>
+        <div class="lc-foot" id="login-ver"></div>
       </form>
     </main>
     <footer class="login-copy">© <span id="login-year"></span> <span data-clinic-name>PHÒNG XN Y KHOA</span> · Kết nối bảo mật</footer>
@@ -61,7 +61,8 @@
       <nav id="nav"></nav>
       <div class="user-box">
         <div class="fw-semibold text-white" id="user-name"></div>
-        <div class="opacity-75 mb-2" id="user-role"></div>
+        <div class="opacity-75" id="user-role"></div>
+        <div class="app-ver mb-2" id="app-ver"></div>
         <div class="d-flex gap-2">
           <button class="btn btn-sm btn-outline-light" id="btn-change-pass"><i class="bi bi-key"></i> Mật khẩu</button>
           <button class="btn btn-sm btn-light" id="btn-logout"><i class="bi bi-box-arrow-right"></i> Thoát</button>
@@ -88,15 +89,15 @@
   <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
   <iframe id="print-frame" title="print" style="position:fixed;width:900px;height:1300px;border:0;left:-10000px;top:0"></iframe>
 
-  <script src="config.js?v=2.2.1"></script>
+  <script src="config.js?v=2.2.2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="assets/api.js?v=2.2.1"></script>
-  <script src="assets/discount-core.js?v=2.2.1"></script>
-  <script src="assets/app.js?v=2.2.1"></script>
-  <script src="assets/sync.js?v=2.2.1"></script>
-  <script src="assets/views-order.js?v=2.2.1"></script>
-  <script src="assets/views-admin.js?v=2.2.1"></script>
+  <script src="assets/api.js?v=2.2.2"></script>
+  <script src="assets/discount-core.js?v=2.2.2"></script>
+  <script src="assets/app.js?v=2.2.2"></script>
+  <script src="assets/sync.js?v=2.2.2"></script>
+  <script src="assets/views-order.js?v=2.2.2"></script>
+  <script src="assets/views-admin.js?v=2.2.2"></script>
 </body>
 </html>
