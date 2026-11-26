@@ -187,7 +187,7 @@
     });
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.2.2';
+  App.FE_VERSION = '2.2.3';
   /**
    * Khoảng tham chiếu để in: mặc định dùng bản danh mục hiện tại (đã chỉnh xuống dòng, đơn vị…).
    * Chỉ giữ bản lưu kèm kết quả khi CÁC CON SỐ khác nhau (ngưỡng đã đổi sau khi làm XN → in đúng ngưỡng lúc đó).

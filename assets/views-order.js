@@ -930,16 +930,18 @@
           '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>') +
         '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
           rowsHtml + '</tbody></table>' +
-        (anyAbn ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
+        (anyAbn && !blank ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
         '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') +
           (p.PrintNote ? '<div class="pnote">' + String(p.PrintNote).split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</div>' : '') + '</td>' +
           '<td class="fr"><div class="mu">' + esc(s.CLINIC_CITY || 'Pleiku') + ', ngày ' + Number(od[2]) + ' tháng ' + Number(od[1]) + ' năm ' + od[0] + '</div>' +
           '<div class="role">TRƯỞNG PHÒNG XÉT NGHIỆM</div><div class="sig"></div><div class="nm">' + esc(s.LAB_HEAD || '') + '</div></td></tr></table>' +
-        '<div class="note">' + esc(s.REPORT_FOOTER || '') + '<span class="pt">In lúc ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) + ' ' + now.toLocaleDateString('vi-VN') + '</span></div>' +
+        '<div class="note">' + (anyAbn && blank ? '<b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao · ↓ thấp) · ' : '') + esc(s.REPORT_FOOTER || '') + '<span class="pt">In lúc ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) + ' ' + now.toLocaleDateString('vi-VN') + '</span></div>' +
         '</section>';
     }).join('');
     var pm = 'margin:8mm 9mm 8mm 9mm}';
-    var css = '@page{size:' + (firstSize || size) + ' portrait;' + pm + '@page a4{size:A4 portrait;' + pm + '@page a5{size:A5 portrait;' + pm + '*{box-sizing:border-box}' +
+    var css = '@page{size:' + (firstSize || size) + ' portrait;' + pm + '@page a4{size:A4 portrait;' + pm + '@page a5{size:A5 portrait;' + pm +
+      '@page ab{size:A4 portrait;margin:5mm 9mm 5mm 9mm}' +   // phiếu chừa trống cho máy XN: lề 5 mm như mẫu Word
+      '*{box-sizing:border-box}' +
       'body{font-family:' + FONT.css + ',Arial,"Helvetica Neue",Helvetica,"Segoe UI",sans-serif;color:#1f2933;margin:0;line-height:1.35}' +
       '.page{position:relative;z-index:1;page-break-after:always;page-break-inside:avoid}' +
       '.sz-a4{page:a4;width:' + SZ.A4.w + ';font-size:' + SZ.A4.base + 'pt}.sz-a5{page:a5;width:' + SZ.A5.w + ';font-size:' + SZ.A5.base + 'pt}' +
@@ -957,6 +959,11 @@
       '.res td{border:.5pt solid #c3ced4;padding:.32em .45em}.res tbody tr:nth-child(even) td{background:rgba(15,76,92,.045)}' +
       '.c{text-align:center}.mu{color:#5f6b7a}.tn{font-weight:600}.rv{font-weight:700;font-size:1.04em}.rf{font-size:.9em}.ab{color:#b42318}' +
       '.legend{font-size:.78em;color:#5f6b7a;margin-top:4px}' +
+      // Bản gọn (chừa trống): đầu phiếu + tiêu đề cỡ cố định (pt) → vùng trống luôn bắt đầu ~32 mm từ mép giấy; bảng + chữ ký co theo mật độ
+      '.has-blank{page:ab}.has-blank header{padding-bottom:3px}.has-blank .logo img{height:34px}.has-blank .cn{font-size:11pt}.has-blank .ci{font-size:6.5pt}' +
+      '.has-blank .pbox{font-size:6.5pt;line-height:1.35}.has-blank .pb1{font-size:8pt}.has-blank .ttl{margin:5px 0 2px}.has-blank h1{font-size:11.5pt}.has-blank h2{font-size:9pt}' +
+      '.has-blank .res th{padding:.22em .4em}.has-blank .res td{padding:.08em .4em;line-height:1.25}.has-blank .foot{margin-top:.35em}.has-blank .sig{height:3.2em}' +
+      '.has-blank .pnote{margin-top:.6em}.has-blank .note{margin-top:.3em;padding-top:.2em}' +
       '.foot{margin-top:1em;page-break-inside:avoid;break-inside:avoid}.foot td{vertical-align:top}.fl{width:40%;padding-top:2px}.pnote{font-style:italic;font-size:.88em;margin-top:2.2em;padding-right:10px}.pnote div{margin-bottom:.35em}.fr{width:60%;text-align:center}.fr .mu,.role,.nm{white-space:nowrap}' +
       '.role{font-weight:700;margin-top:2px;letter-spacing:.02em}.nm{font-weight:700}' +
       '.note{font-size:.7em;color:#5f6b7a;font-style:italic;margin-top:.8em;padding-top:.4em;border-top:1px solid #e3e9ec}.pt{float:right;font-style:normal}' +
@@ -974,10 +981,10 @@
     var fitPages = function () {
       Array.prototype.forEach.call(doc.querySelectorAll('.page'), function (pg) {
         var cfg = SZ[pg.getAttribute('data-sz')] || SZ[size];
-        var maxH = Math.floor((cfg.h - 16) * 96 / 25.4) - 6;   // chiều cao vùng in (px)
+        var maxH = Math.floor((cfg.h - (pg.classList.contains('has-blank') ? 10 : 16)) * 96 / 25.4) - 6;   // chiều cao vùng in (px) – trừ lề trên + dưới
         var basePt = cfg.base;
         var k = 1;
-        var kMin = pg.classList.contains('has-blank') ? 0.6 : 0.7;   // khoảng trống tính bằng mm → không co, chỉ co chữ
+        var kMin = pg.classList.contains('has-blank') ? 0.5 : 0.7;   // khoảng trống tính bằng mm → không co, chỉ co chữ
         while (pg.scrollHeight > maxH && k > kMin) { k = Math.round((k - 0.03) * 100) / 100; pg.style.fontSize = (basePt * k).toFixed(2) + 'pt'; }
       });
     };

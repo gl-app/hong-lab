@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.2.2',
+  VERSION: '2.2.3',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -2888,7 +2888,7 @@ var PrintService = {
     var fileName = data.order.OrderID + '_' + searchKey_(data.order.PatientName).replace(/\s+/g, '_') + '_' + codes.join('-');
 
     var doc = DocumentApp.create(fileName);
-    var docId = doc.getId();
+    var docId = doc.getId(), docFile = null;
     try {
       var body = doc.getBody();
       // Khổ giấy: theo từng nhóm (Panels.PageSize), trống = cấu hình chung. 1 file Google Docs chỉ có 1 khổ →
@@ -2897,10 +2897,13 @@ var PrintService = {
       var blankOf = function (op) { return Number((pm[op.PanelCode] || {}).PrintBlankMM) || 0; };
       var sizeKey = panels.some(function (op) { return blankOf(op) > 0 || ((pm[op.PanelCode] || {}).PageSize || defSize) === 'A4'; }) ? 'A4' : 'A5';
       var size = PrintService.PAGE[sizeKey];
+      var anyBlank = panels.some(function (op) { return blankOf(op) > 0; });
+      // Phiếu chừa trống cho máy XN: lề trên/dưới 5 mm như mẫu Word (YKHOA COMBO) → vùng trống bắt đầu ~32 mm từ mép giấy
       body.setPageWidth(size[0]).setPageHeight(size[1])
-          .setMarginTop(24).setMarginBottom(20).setMarginLeft(28).setMarginRight(24);
+          .setMarginTop(anyBlank ? 14 : 24).setMarginBottom(anyBlank ? 14 : 20).setMarginLeft(28).setMarginRight(24);
       var logo = PrintService.imageBlob_(settings.CLINIC_LOGO_FILE_ID) || PrintService.logoBlob_(settings.CLINIC_LOGO_URL);
-      var watermark = String(settings.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? PrintService.imageBlob_(settings.CLINIC_WATERMARK_FILE_ID) : null;
+      var watermark = String(settings.WATERMARK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' && !panels.every(function (op) { return blankOf(op) > 0; })
+        ? PrintService.imageBlob_(settings.CLINIC_WATERMARK_FILE_ID) : null;
 
       panels.forEach(function (op, idx) {
         if (idx > 0) body.appendPageBreak();
@@ -2909,6 +2912,7 @@ var PrintService = {
         var anchor = panel.TemplateDocId ? (PrintService.appendTemplate_(body, panel.TemplateDocId), PrintService.firstParagraphFrom_(body, startIdx))
                                          : PrintService.appendStandard_(body, data, op, panel, settings, logo, size);
         if (watermark && anchor && !(Number(panel.PrintBlankMM) > 0)) PrintService.addWatermark_(anchor, watermark, size);   // chừa trống cho máy XN → không in hình chìm
+        if (Number(panel.PrintBlankMM) > 0 && !panel.TemplateDocId) PrintService.squeezeGaps_(body, idx === 0 ? 0 : startIdx);   // trang đầu: cả đoạn trống mặc định của Docs
       });
       PrintService.replacePlaceholders_(body, data, settings);
       // Remove the default empty first paragraph created by DocumentApp.create
@@ -2920,7 +2924,7 @@ var PrintService = {
 
       var blob;
       if (format === 'pdf') {
-        blob = DriveApp.getFileById(docId).getAs(MimeType.PDF).setName(fileName + '.pdf');
+        blob = (docFile = DriveApp.getFileById(docId)).getAs(MimeType.PDF).setName(fileName + '.pdf');
         if (toBool_(settings.ARCHIVE_PDF) && settings.REPORT_FOLDER_ID) PrintService.archive_(blob, settings.REPORT_FOLDER_ID, data.order.OrderDate);
       } else {
         var url = 'https://docs.google.com/document/d/' + docId + '/export?format=docx';
@@ -2936,7 +2940,7 @@ var PrintService = {
         base64: Utilities.base64Encode(blob.getBytes())
       };
     } finally {
-      try { DriveApp.getFileById(docId).setTrashed(true); } catch (e) { /* ignore */ }
+      try { (docFile || DriveApp.getFileById(docId)).setTrashed(true); } catch (e) { /* ignore */ }
     }
   },
 
@@ -2952,10 +2956,15 @@ var PrintService = {
     var fitRows = A4 ? 22 : 9;
     var d = nRows <= fitRows ? 1 : Math.max(0.74, 1 - (nRows - fitRows) * (A4 ? 0.015 : 0.035));
     if (blankMM > 0) {
-      var spaceMM = 281 - 18 - 12 - blankMM - 37;           // phần còn lại cho bảng kết quả (A4, trừ đầu phiếu, tiêu đề, chữ ký)
-      d = Math.min(1, Math.max(0.62, spaceMM / ((nRows + 1) * 7.5)));
+      // Chiều cao còn lại cho bảng KQ (pt): trang A4 − lề 2×14 − đầu phiếu ~44 − tiêu đề ~32 − vùng trống − chữ ký + chú thích ~78
+      var availPt = 841.89 - 28 - 46 - 36 - blankMM * 2.8346 - 70;
+      var rowPt = availPt / (nRows + 1);                       // mỗi dòng ≈ 1,4 × cỡ chữ + 2,5 pt (đệm + viền)
+      d = Math.min(1, Math.max(0.5, ((rowPt - 2.5) / 1.4) / 10.5));   // 10.5 = cỡ chữ cột Xét nghiệm (A4) khi d = 1
     }
-    var fs = function (n) { return Math.max(6, Math.round((A4 ? n + 1 : n) * d * 2) / 2); };   // cỡ chữ theo khổ giấy × mật độ
+    var minF = blankMM > 0 ? 5.5 : 6;
+    var fs = function (n) { return Math.max(minF, Math.round((A4 ? n + 1 : n) * d * 2) / 2); };   // cỡ chữ theo khổ giấy × mật độ
+    // Đầu phiếu + tiêu đề: chế độ chừa trống dùng cỡ cố định → vùng trống luôn bắt đầu cùng 1 vị trí trên giấy
+    var fh = blankMM > 0 ? function (n) { return { 13: 11, 10: 8, 8: 6.5, 7.5: 6.5, 14: 11.5, 11.5: 9 }[n] || n; } : fs;
     var pd = function (n) { return Math.max(1, Math.round(n * d * 2) / 2); };
 
     // ---- Header: logo | tên phòng XN, giấy phép · địa chỉ, điện thoại
@@ -2963,17 +2972,18 @@ var PrintService = {
     head.setBorderWidth(0);
     var hl = head.getCell(0, 0), hr = head.getCell(0, 1);
     hl.setWidth(62).setPaddingTop(0).setPaddingLeft(0).setPaddingBottom(4);
-    hr.setWidth(blankMM > 0 ? contentW * 0.5 - 62 : contentW - 62).setPaddingTop(2).setPaddingBottom(4);
+    hr.setWidth(blankMM > 0 ? contentW * 0.5 - 62 : contentW - 62).setPaddingTop(2).setPaddingBottom(blankMM > 0 ? 2 : 4);
+    if (blankMM > 0) hl.setPaddingBottom(2);
     if (blankMM > 0) {
       // Thông tin BN gọn bên phải đầu phiếu → không chiếm khoảng trống dành cho máy XN
-      var pc = head.getCell(0, 2).setWidth(contentW * 0.5).setPaddingTop(1).setPaddingBottom(4).setPaddingLeft(8);
+      var pc = head.getCell(0, 2).setWidth(contentW * 0.5).setPaddingTop(1).setPaddingBottom(2).setPaddingLeft(8);
       var lines = [['Họ và tên: ', o.PatientName, true],
                    ['Tuổi: ', (o.Age === null ? '' : o.Age) + '   ·   Giới tính: ' + (o.Gender || '') + '   ·   Mã BN: ' + o.PatientID, false],
                    ['Ngày khám: ', PrintService.vnDate_(o.OrderDate) + '   ·   BS: ' + (o.DoctorName || ''), false],
                    ['Địa chỉ: ', o.Address || '', false]];
       lines.forEach(function (l, li) {
         var pp = li === 0 ? pc.getChild(0).asParagraph() : pc.appendParagraph('');
-        PrintService.para_(pp, l[0] + l[1], li === 0 ? fs(10) : fs(8), false, C.text);
+        PrintService.para_(pp, l[0] + l[1], li === 0 ? fh(10) : fh(8), false, C.text).setLineSpacing(1);
         if (l[1]) pp.editAsText().setBold(l[0].length, (l[0] + l[1]).length - 1, l[2] || li < 3);
       });
     }
@@ -2981,14 +2991,14 @@ var PrintService = {
       try {
         var img = hl.getChild(0).asParagraph().appendInlineImage(logo);
         var ratio = img.getHeight() / img.getWidth();
-        var h = 44, w = Math.round(h / ratio);
+        var h = blankMM > 0 ? 34 : 44, w = Math.round(h / ratio);
         if (w > 58) { w = 58; h = Math.round(58 * ratio); }
         img.setWidth(w).setHeight(h);
       } catch (e) { /* bad image → skip */ }
     }
-    PrintService.para_(hr.getChild(0).asParagraph(), settings.CLINIC_NAME || 'PHÒNG XÉT NGHIỆM', fs(13), true, C.primary);
-    PrintService.para_(hr.appendParagraph(''), [settings.CLINIC_LICENSE, settings.CLINIC_ADDRESS].filter(String).join(' · '), fs(7.5), false, C.muted);
-    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_PHONE ? 'Điện thoại: ' + settings.CLINIC_PHONE : '', fs(7.5), false, C.muted);
+    PrintService.para_(hr.getChild(0).asParagraph(), settings.CLINIC_NAME || 'PHÒNG XÉT NGHIỆM', fh(13), true, C.primary);
+    PrintService.para_(hr.appendParagraph(''), [settings.CLINIC_LICENSE, settings.CLINIC_ADDRESS].filter(String).join(' · '), fh(7.5), false, C.muted);
+    PrintService.para_(hr.appendParagraph(''), settings.CLINIC_PHONE ? 'Điện thoại: ' + settings.CLINIC_PHONE : '', fh(7.5), false, C.muted);
     // đường kẻ dưới header
     var rule = body.appendTable([['']]);
     rule.setBorderWidth(0);
@@ -2996,13 +3006,13 @@ var PrintService = {
     PrintService.styleText_(rule.getCell(0, 0).getChild(0).asParagraph(), 1, false, C.primary).setLineSpacing(0.1);
 
     // ---- Tiêu đề
-    var t1 = PrintService.para_(body.appendParagraph(''), panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM', fs(14), true, C.primary);
-    t1.setAlignment(DocumentApp.HorizontalAlignment.CENTER).setSpacingBefore(pd(8));
+    var t1 = PrintService.para_(body.appendParagraph(''), panel.PrintTitle || 'PHIẾU KẾT QUẢ XÉT NGHIỆM', fh(14), true, C.primary);
+    t1.setAlignment(DocumentApp.HorizontalAlignment.CENTER).setSpacingBefore(blankMM > 0 ? 4 : pd(8));
     if (panel.PrintSubtitle) {
-      PrintService.para_(body.appendParagraph(''), panel.PrintSubtitle, fs(11.5), true, C.primary)
+      PrintService.para_(body.appendParagraph(''), panel.PrintSubtitle, fh(11.5), true, C.primary)
         .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
     }
-    PrintService.para_(body.appendParagraph(''), ' ', 3, false, C.muted);
+    if (!(blankMM > 0)) PrintService.para_(body.appendParagraph(''), ' ', 3, false, C.muted);
 
     if (blankMM > 0) {
       // ---- Khoảng trống cố định cho máy xét nghiệm in biểu đồ / bảng số liệu (không co theo mật độ)
@@ -3024,7 +3034,7 @@ var PrintService = {
     for (var r = 0; r < 3; r++) {
       for (var c = 0; c < 2; c++) {
         var cell = info.getCell(r, c);
-        cell.setBackgroundColor('#F4F8F9').setPaddingTop(pd(2.5)).setPaddingBottom(pd(2.5)).setPaddingLeft(6).setPaddingRight(6);
+        PrintService.cellAttrs_(cell, pd(2.5), 6, '#F4F8F9');
         var pg = PrintService.styleText_(cell.getChild(0).asParagraph(), fs(9.5), false, C.text);
         // in đậm phần giá trị sau dấu ':'
         var txt = pg.editAsText(), str = txt.getText(), k = str.indexOf(':');
@@ -3035,7 +3045,7 @@ var PrintService = {
     info.getCell(0, 0).setWidth(contentW * 0.6);
     info.getCell(0, 1).setWidth(contentW * 0.4);
     }
-    PrintService.para_(body.appendParagraph(''), ' ', 4, false, C.muted);
+    if (!(blankMM > 0)) PrintService.para_(body.appendParagraph(''), ' ', 4, false, C.muted);
 
     // ---- Bảng kết quả
     var testsAll = Catalog.testsOfPanel(op.PanelCode);
@@ -3067,34 +3077,55 @@ var PrintService = {
       for (var k2 = 0; k2 < 5; k2++) {
         var ce = row.getCell(k2);
         if (i === 0) ce.setWidth(contentW * widths[k2]);
-        ce.setPaddingTop(pd(isHead ? 4 : 3)).setPaddingBottom(pd(isHead ? 4 : 3)).setPaddingLeft(4).setPaddingRight(4);
-        if (isHead) ce.setBackgroundColor(C.primary);
-        else if (i % 2 === 0) ce.setBackgroundColor('#F7FAFB');
-        var pg2 = ce.getChild(0).asParagraph();
+        var vp = blankMM > 0 ? 0.5 : pd(isHead ? 4 : 3);   // chừa trống → đệm dòng tối thiểu
+        PrintService.cellAttrs_(ce, vp, 4, isHead ? C.primary : (i % 2 === 0 ? '#F7FAFB' : null));
         var color = isHead ? '#FFFFFF' : (k2 === 2 && abnormal ? C.high : ((k2 === 0 || k2 === 3) ? C.muted : C.text));
-        PrintService.styleText_(pg2, isHead ? fs(8) : (k2 === 4 ? fs(8.5) : fs(9.5)), isHead || k2 === 1 || k2 === 2, color);
-        if (k2 === 0 || k2 === 2 || k2 === 3) pg2.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+        PrintService.styleText_(ce.getChild(0).asParagraph(), isHead ? fs(8) : (k2 === 4 ? fs(8.5) : fs(9.5)), isHead || k2 === 1 || k2 === 2, color,
+          (k2 === 0 || k2 === 2 || k2 === 3) ? DocumentApp.HorizontalAlignment.CENTER : null);
       }
     }
-    if (anyAbn) {
+    if (anyAbn && !(blankMM > 0)) {   // bản gọn: chú thích "In đậm đỏ" gộp vào dòng cuối phiếu
       var lg = PrintService.para_(body.appendParagraph(''), 'In đậm đỏ: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)', fs(7.5), false, C.muted);
-      lg.setSpacingBefore(3);
+      lg.setSpacingBefore(blankMM > 0 ? 1 : 3);
       lg.editAsText().setForegroundColor(0, 9, C.high).setBold(0, 9, true);
     }
 
     // ---- Chân phiếu: hẹn tái khám | địa danh, ngày – Trưởng phòng XN – ký tên
     var od = parseDate_(o.OrderDate);
     var city = settings.CLINIC_CITY || 'Pleiku';
+    var dateLine = city + ', ngày ' + od.getDate() + ' tháng ' + (od.getMonth() + 1) + ' năm ' + od.getFullYear();
+    if (blankMM > 0) {
+      // Bản gọn (chừa trống cho máy XN): 1 dòng 2 ô – trái: hẹn tái khám + ghi chú; phải: ngày, chức danh, chỗ ký, tên
+      var fc = body.appendTable([['', '']]);
+      fc.setBorderWidth(0);
+      var fl = fc.getCell(0, 0).setWidth(contentW * 0.5).setPaddingLeft(0).setPaddingTop(2).setPaddingBottom(0);
+      var frc = fc.getCell(0, 1).setWidth(contentW * 0.5).setPaddingTop(2).setPaddingBottom(0);
+      var lpars = [];
+      if (o.FollowUpDate) lpars.push(['Hẹn tái khám: ' + PrintService.vnDate_(o.FollowUpDate), false]);
+      String(panel.PrintNote || '').split('\n').filter(String).forEach(function (l) { lpars.push([l, true]); });
+      if (!lpars.length) lpars.push(['', false]);
+      lpars.forEach(function (l, li) {
+        var pp = li === 0 ? fl.getChild(0).asParagraph() : fl.appendParagraph('');
+        PrintService.para_(pp, l[0], fs(8), false, C.text).setSpacingBefore(li === 0 ? 8 : 1);
+        if (l[1] && l[0]) pp.editAsText().setItalic(true);
+      });
+      [[dateLine, fs(8.5), false, C.muted, 0], ['TRƯỞNG PHÒNG XÉT NGHIỆM', fs(9.5), true, C.text, 0], [settings.LAB_HEAD || '', fs(9.5), true, C.text, 24]]
+        .forEach(function (l, li) {
+          var pp = li === 0 ? frc.getChild(0).asParagraph() : frc.appendParagraph('');
+          PrintService.para_(pp, l[0], l[1], l[2], l[3]).setSpacingBefore(l[4]).setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+        });
+    } else {
     var foot = body.appendTable([
-      [o.FollowUpDate ? 'Hẹn tái khám: ' + PrintService.vnDate_(o.FollowUpDate) : '', city + ', ngày ' + od.getDate() + ' tháng ' + (od.getMonth() + 1) + ' năm ' + od.getFullYear()],
+      [o.FollowUpDate ? 'Hẹn tái khám: ' + PrintService.vnDate_(o.FollowUpDate) : '', dateLine],
       ['', 'TRƯỞNG PHÒNG XÉT NGHIỆM'],
       ['', ''],
       ['', settings.LAB_HEAD || '']
     ]);
     foot.setBorderWidth(0);
     for (var fr = 0; fr < foot.getNumRows(); fr++) {
-      foot.getCell(fr, 0).setWidth(contentW * 0.4).setPaddingLeft(0).setPaddingTop(fr === 0 ? pd(10) : 0).setPaddingBottom(0);
-      foot.getCell(fr, 1).setWidth(contentW * 0.6).setPaddingTop(fr === 0 ? pd(10) : 0).setPaddingBottom(0);
+      var ftop = fr === 0 ? pd(10) : 0;
+      foot.getCell(fr, 0).setWidth(contentW * 0.4).setPaddingLeft(0).setPaddingTop(ftop).setPaddingBottom(0);
+      foot.getCell(fr, 1).setWidth(contentW * 0.6).setPaddingTop(ftop).setPaddingBottom(0);
       var lp = PrintService.styleText_(foot.getCell(fr, 0).getChild(0).asParagraph(), fs(9.5), false, C.text);
       if (fr === 0 && o.FollowUpDate) lp.editAsText().setBold(14, lp.getText().length - 1, true);
       // Ghi chú của nhóm XN (VD: "Huyết thanh được lưu giữ 72h…") – in nghiêng bên trái khối chữ ký
@@ -3109,11 +3140,32 @@ var PrintService = {
       rp.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
     }
     foot.getCell(2, 1).getChild(0).asParagraph().setSpacingBefore(Math.max(20, (A4 ? 36 : 26) * d));
+    }
 
-    var note = (settings.REPORT_FOOTER || '') + '   ·   In lúc ' + Utilities.formatDate(new Date(), APP.TZ, 'HH:mm dd/MM/yyyy');
-    var np = PrintService.para_(body.appendParagraph(''), note, fs(6.5), false, C.muted).setSpacingBefore(pd(8));
+    var note = (blankMM > 0 && anyAbn ? 'In đậm đỏ: ngoài khoảng tham chiếu (↑ cao · ↓ thấp)   ·   ' : '') +
+               (settings.REPORT_FOOTER || '') + '   ·   In lúc ' + Utilities.formatDate(new Date(), APP.TZ, 'HH:mm dd/MM/yyyy');
+    var np = PrintService.para_(body.appendParagraph(''), note, fs(6.5), false, C.muted).setSpacingBefore(blankMM > 0 ? 3 : pd(8));
     np.editAsText().setItalic(true);
     return t1;   // đoạn tiêu đề – neo watermark
+  },
+
+  /**
+   * Google Docs tự chèn 1 đoạn trống (cỡ 11pt ≈ 5 mm) giữa 2 bảng liền nhau → với phiếu chừa trống, ép các đoạn trống
+   * đó còn ~1 pt để phiếu gọn 1 trang và vùng trống bắt đầu đúng vị trí như mẫu Word.
+   */
+  squeezeGaps_: function (body, fromIdx) {
+    var P = DocumentApp.ElementType.PARAGRAPH, A = DocumentApp.Attribute, st = {};
+    st[A.FONT_SIZE] = 1; st[A.SPACING_BEFORE] = 0; st[A.SPACING_AFTER] = 0; st[A.LINE_SPACING] = 0.5;
+    for (var i = fromIdx; i < body.getNumChildren(); i++) {
+      var el = body.getChild(i);
+      if (el.getType() !== P) continue;
+      var p = el.asParagraph();
+      if (String(p.getText()).trim() === '') {
+        var hasImg = false;
+        for (var k = 0; k < p.getNumChildren(); k++) if (p.getChild(k).getType() === DocumentApp.ElementType.INLINE_IMAGE) hasImg = true;
+        if (!hasImg && !p.getPositionedImages().length) p.setAttributes(st);
+      }
+    }
   },
 
   /** Số dòng chỉ số sẽ in của 1 panel (cùng quy tắc lọc với bảng kết quả). */
@@ -3163,13 +3215,18 @@ var PrintService = {
       FOLLOWUP_DATE: o.FollowUpDate ? PrintService.vnDate_(o.FollowUpDate) : '', DAY: od.getDate(), MONTH: od.getMonth() + 1,
       YEAR: od.getFullYear(), PRINT_TIME: Utilities.formatDate(new Date(), APP.TZ, 'HH:mm:ss'), LAB_HEAD: settings.LAB_HEAD || ''
     };
-    Object.keys(map).forEach(function (k) { body.replaceText(esc(k), String(map[k] === undefined || map[k] === null ? '' : map[k])); });
+    // Chỉ thay các token thực sự có trong phiếu (1 lần đọc text) – mẫu chuẩn thường không có token nào → 0 lệnh replaceText
+    var present = {};
+    (String(body.getText() || '').match(/\{\{[^{}]+\}\}/g) || []).forEach(function (t) { present[t.slice(2, -2)] = true; });
+    if (!Object.keys(present).length) return;
+    var put = function (k, v) { if (present[k]) { body.replaceText(esc(k), String(v === undefined || v === null ? '' : v)); delete present[k]; } };
+    Object.keys(map).forEach(function (k) { put(k, map[k]); });
     data.results.forEach(function (r) {
-      body.replaceText(esc('T:' + r.TestCode), String(r.Value || ''));
-      body.replaceText(esc('R:' + r.TestCode), String(r.RefText || '').replace(/\n/g, '; '));   // mẫu Word riêng: 1 dòng
-      body.replaceText(esc('F:' + r.TestCode), r.Flag && r.Flag !== 'N' ? r.Flag : '');
+      put('T:' + r.TestCode, r.Value || '');
+      put('R:' + r.TestCode, String(r.RefText || '').replace(/\n/g, '; '));   // mẫu Word riêng: 1 dòng
+      put('F:' + r.TestCode, r.Flag && r.Flag !== 'N' ? r.Flag : '');
     });
-    body.replaceText('\\{\\{[TRF]:[A-Z0-9_]+\\}\\}', '');   // clear unfilled tokens
+    if (Object.keys(present).some(function (k) { return /^[TRF]:/.test(k); })) body.replaceText('\\{\\{[TRF]:[A-Z0-9_]+\\}\\}', '');   // xoá token chưa có KQ
   },
 
   /* ---------------------------------------------------------------- HELPERS */
@@ -3185,13 +3242,23 @@ var PrintService = {
     return PrintService.styleText_(p, size, bold, color);
   },
 
-  styleText_: function (p, size, bold, color) {
-    p.setSpacingBefore(0).setSpacingAfter(0).setLineSpacing(1.05);
-    var t = p.editAsText();
-    if (t.getText().length) {
-      t.setFontFamily(PrintService.font).setFontSize(size).setBold(!!bold).setForegroundColor(color || '#000000');
-    }
+  /** 1 lệnh setAttributes thay cho ~8 lệnh lẻ (spacing, font, cỡ, đậm, màu[, căn lề]) → xuất PDF nhanh hơn. */
+  styleText_: function (p, size, bold, color, align) {
+    var A = DocumentApp.Attribute, a = {};
+    a[A.SPACING_BEFORE] = 0; a[A.SPACING_AFTER] = 0; a[A.LINE_SPACING] = 1.05;
+    a[A.FONT_FAMILY] = PrintService.font; a[A.FONT_SIZE] = size; a[A.BOLD] = !!bold; a[A.FOREGROUND_COLOR] = color || '#000000';
+    if (align) a[A.HORIZONTAL_ALIGNMENT] = align;
+    p.setAttributes(a);
     return p;
+  },
+
+  /** Đệm + nền ô bảng trong 1 lệnh. */
+  cellAttrs_: function (ce, vp, hp, bg) {
+    var A = DocumentApp.Attribute, a = {};
+    a[A.PADDING_TOP] = vp; a[A.PADDING_BOTTOM] = vp; a[A.PADDING_LEFT] = hp; a[A.PADDING_RIGHT] = hp;
+    if (bg) a[A.BACKGROUND_COLOR] = bg;
+    ce.setAttributes(a);
+    return ce;
   },
 
   vnDate_: function (s) {
@@ -3201,7 +3268,35 @@ var PrintService = {
 
   imageBlob_: function (fileId) {
     if (!fileId) return null;
-    try { return DriveApp.getFileById(fileId).getBlob(); } catch (e) { return null; }
+    return PrintService.cachedBlob_('img_' + fileId, function () {
+      try { return DriveApp.getFileById(fileId).getBlob(); } catch (e) { return null; }
+    });
+  },
+
+  /**
+   * Cache ảnh (logo/watermark) 6 giờ trong CacheService → bỏ 1 lần gọi Drive/UrlFetch mỗi lần xuất PDF.
+   * Chỉ cache ảnh ≤ 70 KB (giới hạn 100 KB/khoá sau base64). Đổi ảnh → đổi FileId/URL là tự lấy mới.
+   */
+  cachedBlob_: function (key, fetcher) {
+    var cache = null, ck = 'pb1_' + String(key).replace(/[^A-Za-z0-9_-]/g, '_').slice(-200);
+    try { cache = CacheService.getScriptCache(); } catch (e) {}
+    if (cache) {
+      try {
+        var hit = cache.get(ck);
+        if (hit) {
+          var o = JSON.parse(hit);
+          return Utilities.newBlob(Utilities.base64Decode(o.d), o.t, o.n);
+        }
+      } catch (e) {}
+    }
+    var blob = fetcher();
+    if (blob && cache) {
+      try {
+        var bytes = blob.getBytes();
+        if (bytes.length <= 70000) cache.put(ck, JSON.stringify({ t: blob.getContentType(), n: blob.getName() || 'img', d: Utilities.base64Encode(bytes) }), 21600);
+      } catch (e) {}
+    }
+    return blob;
   },
 
   /**
@@ -3227,12 +3322,14 @@ var PrintService = {
 
   logoBlob_: function (url) {
     if (!url) return null;
-    try {
-      var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
-      if (res.getResponseCode() !== 200) return null;
-      var blob = res.getBlob();
-      return /^image\//.test(blob.getContentType()) ? blob : null;
-    } catch (e) { return null; }
+    return PrintService.cachedBlob_('url_' + url, function () {
+      try {
+        var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+        if (res.getResponseCode() !== 200) return null;
+        var blob = res.getBlob();
+        return /^image\//.test(blob.getContentType()) ? blob : null;
+      } catch (e) { return null; }
+    });
   },
 
   archive_: function (blob, folderId, orderDate) {
