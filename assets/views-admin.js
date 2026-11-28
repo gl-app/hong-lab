@@ -776,15 +776,55 @@
           '<textarea class="form-control" name="PrintNote" rows="2" placeholder="VD: Huyết thanh được lưu giữ 72h, khi cần thiết có thể dùng làm thêm một số xét nghiệm khác.">' + esc(p.PrintNote || '') + '</textarea></div>' +
         '<div class="col-4"><label class="form-label">Chừa trống cho máy XN (mm)</label><input class="form-control tabular" name="PrintBlankMM" type="number" min="0" max="200" value="' + esc(p.PrintBlankMM || 0) + '" title="Khoảng trống dưới tiêu đề để in tiếp kết quả/biểu đồ từ máy xét nghiệm lên cùng tờ giấy. 0 = không chừa. Khi > 0: khổ A4, thông tin BN chuyển lên đầu phiếu"></div>' +
         '<div class="col-8"><label class="form-label">ID mẫu in Google Docs riêng (tuỳ chọn)</label><input class="form-control mono" name="TemplateDocId" value="' + esc(p.TemplateDocId || '') + '" placeholder="Bỏ trống = dùng mẫu chuẩn tự sinh"></div>' +
-        '</form><label class="form-label mt-3">Chỉ số thuộc nhóm (thứ tự in theo thứ tự chọn)</label><div class="test-pick" style="max-height:260px;overflow:auto"><div class="d-flex flex-wrap column-gap-3">' +
+        '</form><label class="form-label mt-3">Chỉ số thuộc nhóm <span class="text-muted fw-normal small">· tích để thêm (thêm vào cuối danh sách thứ tự bên dưới)</span></label><div class="test-pick" style="max-height:260px;overflow:auto"><div class="d-flex flex-wrap column-gap-3">' +
         cat.tests.map(function (t) {
           return '<div class="form-check" style="min-width:220px"><input class="form-check-input" type="checkbox" id="pm-' + t.TestCode + '" value="' + t.TestCode + '"' + (members.indexOf(t.TestCode) > -1 ? ' checked' : '') + '>' +
             '<label class="form-check-label small" for="pm-' + t.TestCode + '">' + esc(t.TestName) + ' <span class="text-muted mono">' + t.TestCode + '</span></label></div>';
-        }).join('') + '</div></div></div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="p-save">Lưu nhóm</button></div></div>';
+        }).join('') + '</div></div>' +
+        '<label class="form-label mt-3 d-flex justify-content-between align-items-end"><span>Thứ tự hiển thị &amp; in <span class="text-muted fw-normal small">· kéo thả hoặc bấm ↑ ↓ · áp dụng cho màn tạo phiếu, nhập kết quả, phiếu in</span></span>' +
+          '<a href="#" class="small" id="p-sort-cat" title="Sắp lại theo cột Thứ tự trong danh mục chỉ số">Xếp theo danh mục</a></label>' +
+        '<ol class="list-group list-group-numbered p-order" id="p-order"></ol>' +
+        '</div><div class="card-footer bg-white text-end"><button class="btn btn-primary" id="p-save">Lưu nhóm</button></div></div>';
       var order = members.slice();
+      var tName = function (c) { var t = App.test(c) || {}; return t.TestName || c; };
+      var drawOrder = function () {
+        var ol = U.$('#p-order', box);
+        ol.innerHTML = order.length ? order.map(function (c, i) {
+          return '<li class="list-group-item d-flex align-items-center gap-2 py-1" draggable="true" data-oc="' + esc(c) + '">' +
+            '<i class="bi bi-grip-vertical text-muted" style="cursor:grab"></i><span class="flex-grow-1 small">' + esc(tName(c)) + ' <span class="text-muted mono">' + esc(c) + '</span></span>' +
+            '<button type="button" class="btn btn-sm btn-light py-0" data-omove="-1" title="Lên"' + (i === 0 ? ' disabled' : '') + '><i class="bi bi-arrow-up"></i></button>' +
+            '<button type="button" class="btn btn-sm btn-light py-0" data-omove="1" title="Xuống"' + (i === order.length - 1 ? ' disabled' : '') + '><i class="bi bi-arrow-down"></i></button></li>';
+        }).join('') : '<li class="list-group-item small text-muted">Chưa chọn chỉ số nào</li>';
+      };
+      drawOrder();
       U.on(box, 'change', '.test-pick input', function (e, el) {
-        if (el.checked) order.push(el.value); else order = order.filter(function (c) { return c !== el.value; });
+        if (el.checked) { if (order.indexOf(el.value) < 0) order.push(el.value); } else order = order.filter(function (c) { return c !== el.value; });
+        drawOrder();
       });
+      U.on(box, 'click', '[data-omove]', function (e, el) {
+        var c = el.closest('[data-oc]').getAttribute('data-oc'), i = order.indexOf(c), j = i + Number(el.getAttribute('data-omove'));
+        if (j < 0 || j >= order.length) return;
+        order.splice(i, 1); order.splice(j, 0, c); drawOrder();
+      });
+      U.on(box, 'click', '#p-sort-cat', function (e) {
+        e.preventDefault();
+        var so = function (c) { var t = App.test(c); return t ? Number(t.SortOrder) : 999; };
+        order = order.map(function (c, i) { return { c: c, i: i }; }).sort(function (a, b) { return (so(a.c) - so(b.c)) || (a.i - b.i); }).map(function (x) { return x.c; });
+        drawOrder();
+      });
+      var dragC = null, ol = U.$('#p-order', box);
+      ol.addEventListener('dragstart', function (e) { var li = e.target.closest('[data-oc]'); if (!li) return; dragC = li.getAttribute('data-oc'); li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', dragC); } catch (x) {} });
+      ol.addEventListener('dragend', function () { dragC = null; drawOrder(); });
+      ol.addEventListener('dragover', function (e) {
+        if (!dragC) return; e.preventDefault();
+        var li = e.target.closest('[data-oc]'); if (!li || li.getAttribute('data-oc') === dragC) return;
+        var r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2, tgt = li.getAttribute('data-oc');
+        order = order.filter(function (c) { return c !== dragC; });
+        order.splice(order.indexOf(tgt) + (after ? 1 : 0), 0, dragC);
+        var cur = ol.querySelector('[data-oc="' + dragC + '"]');
+        if (cur && cur !== li) ol.insertBefore(cur, after ? li.nextSibling : li);
+      });
+      ol.addEventListener('drop', function (e) { e.preventDefault(); });
       U.$('#p-save', box).onclick = function () {
         var f = U.$('#p-form', box);
         if (!f.reportValidity()) return;
@@ -812,7 +852,7 @@
         '<div class="col-3"><label class="form-label">Nữ – Max</label><input class="form-control" name="RefMaxF" value="' + esc(v(t.RefMaxF)) + '"></div>' +
         '<div class="col-8"><label class="form-label">Khoảng tham chiếu hiển thị trên phiếu <span class="text-muted fw-normal small">· Enter để xuống dòng</span></label>' +
           '<textarea class="form-control" name="RefText" rows="2" placeholder="VD:&#10;Nam ≤ 42&#10;Nữ ≤ 32 U/L/37°C">' + esc(v(t.RefText)) + '</textarea></div>' +
-        '<div class="col-2"><label class="form-label">Thứ tự</label><input class="form-control" name="SortOrder" value="' + esc(v(t.SortOrder)) + '"></div>' +
+        '<div class="col-2"><label class="form-label" title="Thứ tự trong danh mục chỉ số & biểu đồ lịch sử. Được trùng (trùng thì giữ thứ tự dòng). Thứ tự in trong từng nhóm chỉnh ở form Nhóm.">Thứ tự <i class="bi bi-info-circle text-muted"></i></label><input class="form-control" name="SortOrder" value="' + esc(v(t.SortOrder)) + '"></div>' +
         '<div class="col-2 d-flex align-items-end"><div class="form-check"><input class="form-check-input" type="checkbox" name="IsActive" id="t-act"' + (t.IsActive ? ' checked' : '') + '><label class="form-check-label" for="t-act">Dùng</label></div></div>' +
         '</form><div class="small text-muted mt-2">Ngưỡng dùng để gắn cờ ↑/↓ tự động. Bỏ trống Nữ = dùng ngưỡng Nam.</div></div><div class="modal-footer"><button class="btn btn-primary" id="t-save">Lưu</button></div>', { size: 'lg' });
       m.body.querySelector('#t-save').onclick = function () {

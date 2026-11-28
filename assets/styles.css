@@ -238,3 +238,6 @@ input.res-input.res-calc { background: #f3f7f8; border-style: dashed; font-weigh
 .st-off { background: #EEF1F4; color: #5F6B7A; }
 .row-off td { color: #8A94A3; }
 .row-off td a { color: #8A94A3; }
+/* Thứ tự chỉ số trong nhóm (kéo thả) */
+.p-order { max-height: 320px; overflow: auto; }
+.p-order .list-group-item.dragging { opacity: .5; background: #EEF6F8; }

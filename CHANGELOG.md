@@ -4,6 +4,10 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.4 · bổ sung giao diện (2026-11-28) — Sắp xếp thứ tự chỉ số trong nhóm
+- Quản trị → Danh mục XN → Nhóm: danh sách **Thứ tự hiển thị & in** – kéo thả hoặc ↑ ↓; nút "Xếp theo danh mục" (theo cột Thứ tự của chỉ số). Áp dụng màn tạo phiếu, nhập kết quả, phiếu in.
+- Chỉ cập nhật giao diện (Ctrl+F5), không cần deploy lại Apps Script.
+
 ## v2.3.4 (2026-11-28) — Tạo phiếu không chọn chỉ số
 - Tạo phiếu: nhóm chưa chọn chỉ số → hỏi xác nhận "Tạo phiếu không chỉ số" (trước đây chặn không cho lưu). Tiền tính theo giá nhóm.
 - Phiếu in nhóm không chỉ số: không có bảng chỉ số (In nhanh & PDF) – kết quả do máy XN in lên phiếu.
