@@ -4,6 +4,13 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.4 (2026-11-28) — Tạo phiếu không chọn chỉ số
+- Tạo phiếu: nhóm chưa chọn chỉ số → hỏi xác nhận "Tạo phiếu không chỉ số" (trước đây chặn không cho lưu). Tiền tính theo giá nhóm.
+- Phiếu in nhóm không chỉ số: không có bảng chỉ số (In nhanh & PDF) – kết quả do máy XN in lên phiếu.
+- In nhóm không chỉ số = đã có kết quả: nhóm chuyển "Đã có KQ", phiếu tự Hoàn tất khi mọi nhóm xong (tính thời gian trả KQ = tạo phiếu → in). In nhanh nay cũng ghi nhận số lần in trên máy chủ.
+- Sửa phiếu đổi nhóm từ không chỉ số ↔ có chỉ số → nhóm quay về chờ kết quả.
+- Cần dán `LIS_Code.gs` + Deploy → New version.
+
 ## v2.3.3 (2026-11-28) — Phiếu chừa trống không chỉ số → bỏ bảng
 - Nhóm có "Chừa trống cho máy XN": nếu phiếu không chọn / chưa có chỉ số nào thì không in bảng kết quả (không còn dòng tiêu đề + "(Chưa có kết quả)"); chỉ còn đầu phiếu, vùng trống và chân phiếu. Áp dụng cả In nhanh và Xuất PDF.
 - Nhóm in thường (không chừa trống) giữ nguyên dòng "(Chưa có kết quả)".

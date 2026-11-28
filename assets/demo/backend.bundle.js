@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.3.3',
+  VERSION: '2.3.4',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -246,6 +246,7 @@ var ROUTES = {
   'report.export':         { fn: function (p, c) { return ReportService.exportData(p, c); }, perm: PERM.REPORT_EXPORT },
 
   'print.render':          { fn: function (p, c) { return PrintService.render(p, c); }, perm: PERM.PRINT },
+  'print.mark':            { fn: function (p, c) { return PrintService.mark(p, c); }, perm: PERM.PRINT },
 
   'audit.list':            { fn: function (p) { return Audit.list(p); }, perm: PERM.AUDIT_VIEW },
 
@@ -2107,7 +2108,7 @@ var OrderService = {
       };
 
       var panelRows = lines.map(function (l) {
-        return { OrderID: orderId, PanelCode: l.PanelCode, TestCodes: l.TestCodes.join(','), Amount: l.Amount,
+        return { OrderID: orderId, PanelCode: l.PanelCode, TestCodes: OrderService.tcStr_(l), Amount: l.Amount,
                  ResultStatus: ENUM.PANEL_STATUS.PENDING, PrintCount: 0, LastPrintedAt: '' };
       });
 
@@ -2185,8 +2186,13 @@ var OrderService = {
         var updates = [], inserts = [];
         lines.forEach(function (l) {
           var ex = existingPanels.filter(function (e) { return e.PanelCode === l.PanelCode; })[0];
-          if (ex) updates.push({ row: ex._row, patch: { TestCodes: l.TestCodes.join(','), Amount: l.Amount } });
-          else inserts.push({ OrderID: p.orderId, PanelCode: l.PanelCode, TestCodes: l.TestCodes.join(','), Amount: l.Amount,
+          if (ex) {
+            var up = { TestCodes: OrderService.tcStr_(l), Amount: l.Amount };
+            // Đổi giữa "không chỉ số" ↔ "có chỉ số" → nhóm quay về chờ kết quả
+            if (OrderService.isNone_(ex) !== !!l.None) up.ResultStatus = ENUM.PANEL_STATUS.PENDING;
+            updates.push({ row: ex._row, patch: up });
+          }
+          else inserts.push({ OrderID: p.orderId, PanelCode: l.PanelCode, TestCodes: OrderService.tcStr_(l), Amount: l.Amount,
                               ResultStatus: ENUM.PANEL_STATUS.PENDING, PrintCount: 0, LastPrintedAt: '' });
         });
         Db.updateRows(T.ORDER_PANELS, db, updates);
@@ -2304,6 +2310,7 @@ var OrderService = {
       finalResults.forEach(function (r) { hasRes[r.PanelCode] = true; });
       var panelUpdates = [];
       panels.forEach(function (x) {
+        if (OrderService.isNone_(x)) return;   // nhóm không chỉ số: trạng thái theo lần in (máy XN in KQ)
         var st = hasRes[x.PanelCode] ? ENUM.PANEL_STATUS.RESULTED : ENUM.PANEL_STATUS.PENDING;
         if (x.ResultStatus !== st) { x.ResultStatus = st; panelUpdates.push({ row: x._row, patch: { ResultStatus: st } }); }
       });
@@ -2547,8 +2554,10 @@ var OrderService = {
       if (seen[code]) throw new AppError('VALIDATION', 'Nhóm XN bị trùng: ' + code);
       seen[code] = true;
       var allCodes = Catalog.testsOfPanel(code).map(function (t) { return t.TestCode; });
-      var sel = (l.tests && l.tests.length) ? l.tests.filter(function (t) { return allCodes.indexOf(t) > -1; }) : allCodes.slice();
-      return { PanelCode: code, panel: panel, allCodes: allCodes, TestCodes: sel, req: l };
+      // Không chọn chỉ số (đã xác nhận ở giao diện): kết quả do máy XN in → lưu TestCodes = '-'
+      var none = l.none === true || (Array.isArray(l.tests) && l.tests.indexOf(OrderService.NO_TESTS) > -1);
+      var sel = none ? [] : (l.tests && l.tests.length) ? l.tests.filter(function (t) { return allCodes.indexOf(t) > -1; }) : allCodes.slice();
+      return { PanelCode: code, panel: panel, allCodes: allCodes, TestCodes: sel, None: none, req: l };
     });
     // Chỉ số trung gian của chỉ số tự tính
     lines.forEach(function (ln) {
@@ -2556,7 +2565,7 @@ var OrderService = {
         Calc.deps(tc).forEach(function (d) {
           if (lines.some(function (x) { return x.TestCodes.indexOf(d) > -1; })) return;
           if (ln.allCodes.indexOf(d) > -1) { ln.TestCodes.push(d); return; }
-          var other = lines.filter(function (x) { return x.allCodes.indexOf(d) > -1; })[0];
+          var other = lines.filter(function (x) { return !x.None && x.allCodes.indexOf(d) > -1; })[0];
           if (other) { other.TestCodes.push(d); return; }
           throw new AppError('VALIDATION', (tm[tc] || {}).TestName + ' cần chỉ số ' + ((tm[d] || {}).TestName || d) + ' nhưng phiếu không có nhóm chứa chỉ số này.');
         });
@@ -2587,7 +2596,7 @@ var OrderService = {
         var ex = existing.filter(function (e) { return e.PanelCode === code; })[0];
         if (ex) amount = toNum_(ex.Amount, amount);   // keep agreed price when not re-specified
       }
-      return { PanelCode: code, TestCodes: ln.TestCodes, Amount: amount };
+      return { PanelCode: code, TestCodes: ln.TestCodes, Amount: amount, None: ln.None };
     });
   },
 
@@ -2666,6 +2675,11 @@ var OrderService = {
     });
     return rows;
   },
+
+  /** Nhóm "không chọn chỉ số" – kết quả do máy XN in thẳng lên phiếu. */
+  NO_TESTS: '-',
+  isNone_: function (pr) { return String(pr.TestCodes || '').trim() === OrderService.NO_TESTS; },
+  tcStr_: function (l) { return l.None ? OrderService.NO_TESTS : l.TestCodes.join(','); },
 
   statusFromPanels_: function (panelRows) {
     if (!panelRows.length) return ENUM.ORDER_STATUS.REGISTERED;
@@ -3137,7 +3151,8 @@ var PrintService = {
     });
     if (!rows.length) grid.push(['', '(Chưa có kết quả)', '', '', '']);
     // Phiếu chừa trống mà không chọn/không có chỉ số nào → bỏ hẳn bảng (máy XN in kết quả vào vùng trống)
-    if (rows.length || !(blankMM > 0)) {
+    var noTests = selected.length === 1 && selected[0] === OrderService.NO_TESTS;   // phiếu tạo "không chỉ số"
+    if (rows.length || !(blankMM > 0 || noTests)) {
       var tbl = body.appendTable(grid);
       tbl.setBorderColor('#C3CED4').setBorderWidth(0.5);
       var widths = [0.07, 0.37, 0.17, 0.13, 0.26];
@@ -3418,15 +3433,39 @@ var PrintService = {
     } catch (e) { console.warn('Archive PDF failed: ' + e.message); }
   },
 
+  /** In nhanh trên trình duyệt xong → ghi nhận lần in (p: { orderId, panelCodes }). Trả phiếu mới nếu trạng thái đổi. */
+  mark: function (p, ctx) {
+    required_(p, ['orderId']);
+    var codes = Array.isArray(p.panelCodes) ? p.panelCodes : String(p.panelCodes || '').split(',').filter(String);
+    return PrintService.markPrinted_(p.orderId, codes, ctx);
+  },
+
+  /**
+   * Ghi nhận lần in. Nhóm "không chỉ số" (kết quả do máy XN in lên phiếu): in xong = đã có kết quả
+   * → nhóm RESULTED, cập nhật trạng thái phiếu (hoàn tất nếu mọi nhóm xong). Trả view phiếu khi trạng thái đổi, không thì null.
+   */
   markPrinted_: function (orderId, codes, ctx) {
     var year = YearDb.locateOrder(orderId);
-    withLock_(function () {
-      var rows = Db.findBy(T.ORDER_PANELS, year, 'OrderID', orderId).filter(function (x) { return codes.indexOf(x.PanelCode) > -1; });
-      Db.updateRows(T.ORDER_PANELS, year, rows.map(function (x) {
-        return { row: x._row, patch: { PrintCount: toNum_(x.PrintCount, 0) + 1, LastPrintedAt: nowIso_() } };
-      }));
+    var view = withLock_(function () {
+      var all = Db.findBy(T.ORDER_PANELS, year, 'OrderID', orderId), now = nowIso_(), changed = false;
+      var ups = all.filter(function (x) { return !codes.length || codes.indexOf(x.PanelCode) > -1; }).map(function (x) {
+        var patch = { PrintCount: (x.PrintCount = toNum_(x.PrintCount, 0) + 1), LastPrintedAt: (x.LastPrintedAt = now) };
+        if (OrderService.isNone_(x) && x.ResultStatus !== ENUM.PANEL_STATUS.RESULTED) { patch.ResultStatus = x.ResultStatus = ENUM.PANEL_STATUS.RESULTED; changed = true; }
+        return { row: x._row, patch: patch };
+      });
+      Db.updateRows(T.ORDER_PANELS, year, ups);
+      if (!changed) return null;
+      var order = Db.findOne(T.ORDERS, year, 'OrderID', orderId);
+      if (!order || order.Status === ENUM.ORDER_STATUS.CANCELLED) return null;
+      var op = { Status: OrderService.statusFromPanels_(all), UpdatedAt: now, UpdatedBy: ctx.username, Version: Number(order.Version || 1) + 1 };
+      if (!order.FirstResultAt) op.FirstResultAt = now;
+      if (op.Status === ENUM.ORDER_STATUS.COMPLETED && !order.CompletedAt) op.CompletedAt = now;
+      Db.updateRow(T.ORDERS, year, order._row, op);
+      if (op.Status !== order.Status) VisitIndex.patch(Object.assign({}, order, op), year);
+      return OrderService.buildView_(Object.assign({}, order, op), all, Db.findBy(T.RESULTS, year, 'OrderID', orderId), ctx);
     });
     Audit.write(ctx, year, 'PRINT', 'Order', orderId, { panels: codes });
+    return view;
   }
 };
 

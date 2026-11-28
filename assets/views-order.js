@@ -78,6 +78,9 @@
   }
 
   function resultTableHtml(panelCode, testCodes, resMap, gender, disabled) {
+    if (testCodes && testCodes.length === 1 && testCodes[0] === '-') {
+      return U.empty('Phiếu không chọn chỉ số – kết quả do máy XN in lên phiếu. In phiếu nhóm này sẽ ghi nhận đã có kết quả.', 'bi-printer');
+    }
     var tests = App.testsOfPanel(panelCode).filter(function (t) { return !testCodes || !testCodes.length || testCodes.indexOf(t.TestCode) > -1; });
     if (!tests.length) return U.empty('Nhóm chưa có chỉ số');
     return '<div class="table-wrap"><table class="table table-sm res-table" data-panel="' + panelCode + '"><thead><tr><th style="width:36px">#</th><th>Chỉ số</th><th>Kết quả</th><th>Đơn vị</th><th>Khoảng tham chiếu</th><th></th></tr></thead><tbody>' +
@@ -427,10 +430,18 @@
       var codes = Object.keys(st.panels);
       if (!codes.length) { U.toast('Chưa chọn nhóm xét nghiệm', 'warn'); return; }
       var empty = codes.filter(function (c) { return !st.panels[c].tests.length; });
-      if (empty.length) { U.toast('Nhóm ' + empty.join(', ') + ' chưa chọn chỉ số nào', 'warn'); return; }
+      // Nhóm không chọn chỉ số → hỏi xác nhận (VD Huyết học: máy XN in kết quả thẳng lên phiếu)
+      if (empty.length && !save._noTestsOk) {
+        U.confirm('Không chọn chỉ số',
+          '<div class="d-flex gap-3"><i class="bi bi-question-circle-fill text-warning fs-3"></i><div>Nhóm <b>' + empty.map(function (c) { return esc(c + ' – ' + ((App.panel(c) || {}).PanelName || '')); }).join(', ') + '</b> chưa chọn chỉ số nào.' +
+          '<ul class="small mt-2 mb-0 ps-3"><li>Phiếu in <b>không có bảng chỉ số</b> (kết quả do máy XN in / đính kèm).</li>' +
+          '<li>Tiền tính theo <b>giá nhóm</b>.</li><li>In phiếu nhóm này = đã có kết quả (phiếu tự chuyển Hoàn tất khi mọi nhóm xong).</li></ul></div></div>', 'Tạo phiếu không chỉ số')
+          .then(function (ok) { if (ok) { save._noTestsOk = true; try { save(andPrint); } finally { save._noTestsOk = false; } } });
+        return;
+      }
       var payload = {
         patientId: st.patient.PatientID, orderDate: U.$('#o-date', view).value, doctorName: U.$('#o-doctor', view).value, assignedTo: assignPicker.get(),
-        panels: codes.map(function (c) { return { panelCode: c, tests: st.panels[c].tests }; }),
+        panels: codes.map(function (c) { return st.panels[c].tests.length ? { panelCode: c, tests: st.panels[c].tests } : { panelCode: c, tests: [], none: true }; }),
         discount: Number(String(U.$('#o-discount', view).value).replace(/\D/g, '')) || 0, discountMode: st.discManual ? 'MANUAL' : 'AUTO',
         paymentStatus: U.$('#o-pay', view).value, followUpDays: Number(U.$('#o-follow', view).value) || 0, note: U.$('#o-note', view).value
       };
@@ -446,8 +457,8 @@
         btns.forEach(function (b) { b.disabled = true; });
         U.api('order.create', payload, { silent: true }).then(function (d) {
           U.toast('Đã lưu phiếu ' + d.order.OrderID);
-          if (andPrint) App.quickPrint(d);
-          App.go('order/' + d.order.OrderID);
+          // In ngay: chờ máy chủ ghi nhận lần in (nhóm không chỉ số → hoàn tất) rồi mới mở phiếu để thấy đúng trạng thái
+          (andPrint ? App.quickPrint(d) : Promise.resolve()).then(function () { App.go('order/' + d.order.OrderID); });
         }).catch(function (e) {
           if (e.code !== 'DUPLICATE') { if (e.code !== 'UNAUTHORIZED') U.toast(e.message || 'Lỗi', 'error'); return; }
           // Có thể đang tạo dư: hỏi lại trước khi tạo thêm
@@ -676,8 +687,9 @@
       if (activeTab.indexOf('p-') === 0) {
         var code = activeTab.substring(2);
         var op = data.panels.filter(function (p) { return p.PanelCode === code; })[0];
+        var noTests = op.TestCodes.length === 1 && op.TestCodes[0] === '-';
         box.innerHTML = resultTableHtml(code, op.TestCodes, resMap[code] || {}, o.Gender, !canEnter) +
-          (canEnter ? '<div class="d-flex gap-2 justify-content-end mt-3"><span class="small text-muted me-auto align-self-center"><span class="kbd">Enter</span> chuyển ô kế tiếp</span>' +
+          (canEnter && !noTests ? '<div class="d-flex gap-2 justify-content-end mt-3"><span class="small text-muted me-auto align-self-center"><span class="kbd">Enter</span> chuyển ô kế tiếp</span>' +
             '<button class="btn btn-primary" id="d-save-res"><i class="bi bi-save"></i> Lưu kết quả ' + code + '</button></div>' : '');
         bindResultInputs(box, function () { return { gender: o.Gender, age: o.Age }; });
         // Giá trị gốc lúc mở (gửi kèm để máy chủ phát hiện 2 máy cùng sửa 1 ô) + đánh dấu ô đang chờ lưu
@@ -727,7 +739,7 @@
         };
       });
       var qp = U.$('#d-qprint', view);
-      if (qp) qp.onclick = function () { needConfirmed(function () { App.choosePanelsThen(data, function (codes) { App.quickPrint(data, codes); }); }, 'in'); };
+      if (qp) qp.onclick = function () { needConfirmed(function () { App.choosePanelsThen(data, function (codes) { App.quickPrint(data, codes).then(function (d) { if (d && d.order && data && d.order.OrderID === data.order.OrderID) { data = d; render(); U.toast('Đã ghi nhận in – phiếu: ' + U.statusLabel(d.order.Status)); } }); }); }, 'in'); };
       U.$$('[data-export]', view).forEach(function (b) {
         b.onclick = function () {
           var fmt = b.getAttribute('data-export');
@@ -929,7 +941,7 @@
           '<tr><td>Mã BN: <b class="mono">' + esc(o.PatientID) + '</b></td><td>Ngày khám: <b>' + U.vnDate(o.OrderDate) + '</b></td></tr>' +
           '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>') +
         // Phiếu chừa trống mà không chọn/không có chỉ số nào → bỏ hẳn bảng (máy XN in kết quả vào vùng trống)
-        (blank > 0 && !tests.length ? '' : '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
+        ((blank > 0 || (op.TestCodes.length === 1 && op.TestCodes[0] === '-')) && !tests.length ? '' : '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
           rowsHtml + '</tbody></table>') +
         (anyAbn && !blank ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
         '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') +
@@ -1009,6 +1021,8 @@
       ]).then(go, go);
     };
     setTimeout(waitFont, 120);
+    // Ghi nhận lần in trên máy chủ (số lần in; nhóm không chỉ số → in xong = đã có kết quả). Trả phiếu mới nếu trạng thái đổi.
+    return U.api('print.mark', { orderId: o.OrderID, panelCodes: codes }, { silent: true }).catch(function () { return null; });
   };
 
   /* ================================================================ HISTORY COMPONENT */
