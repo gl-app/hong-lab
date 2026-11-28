@@ -18,7 +18,7 @@
 
 var APP = {
   NAME: 'LIS Phòng XN Y Khoa',
-  VERSION: '2.3.2',
+  VERSION: '2.3.3',
   TZ: 'Asia/Ho_Chi_Minh',
   API_VERSION: 1
 };
@@ -3136,23 +3136,26 @@ var PrintService = {
       grid.push([String(i + 1), t.TestName, (rs.Value || '') + mark, t.Unit || '', Catalog.refPrint(rs.RefText, t, o.Gender)]);
     });
     if (!rows.length) grid.push(['', '(Chưa có kết quả)', '', '', '']);
-    var tbl = body.appendTable(grid);
-    tbl.setBorderColor('#C3CED4').setBorderWidth(0.5);
-    var widths = [0.07, 0.37, 0.17, 0.13, 0.26];
-    for (var i = 0; i < grid.length; i++) {
-      var row = tbl.getRow(i);
-      var isHead = i === 0;
-      var flag = (isHead || !rows.length) ? '' : ((resMap[rows[i - 1].TestCode] || {}).Flag || '');
-      var abnormal = flag && flag !== 'N';
-      if (abnormal) anyAbn = true;
-      for (var k2 = 0; k2 < 5; k2++) {
-        var ce = row.getCell(k2);
-        if (i === 0) ce.setWidth(contentW * widths[k2]);
-        var vp = blankMM > 0 ? 0.5 : pd(isHead ? 4 : 3);   // chừa trống → đệm dòng tối thiểu
-        PrintService.cellAttrs_(ce, vp, 4, isHead ? C.primary : (i % 2 === 0 ? '#F7FAFB' : null));
-        var color = isHead ? '#FFFFFF' : (k2 === 2 && abnormal ? C.high : ((k2 === 0 || k2 === 3) ? C.muted : C.text));
-        PrintService.styleText_(ce.getChild(0).asParagraph(), isHead ? fs(8) : (k2 === 4 ? fs(8.5) : fs(9.5)), isHead || k2 === 1 || k2 === 2, color,
-          (k2 === 0 || k2 === 2 || k2 === 3) ? DocumentApp.HorizontalAlignment.CENTER : null);
+    // Phiếu chừa trống mà không chọn/không có chỉ số nào → bỏ hẳn bảng (máy XN in kết quả vào vùng trống)
+    if (rows.length || !(blankMM > 0)) {
+      var tbl = body.appendTable(grid);
+      tbl.setBorderColor('#C3CED4').setBorderWidth(0.5);
+      var widths = [0.07, 0.37, 0.17, 0.13, 0.26];
+      for (var i = 0; i < grid.length; i++) {
+        var row = tbl.getRow(i);
+        var isHead = i === 0;
+        var flag = (isHead || !rows.length) ? '' : ((resMap[rows[i - 1].TestCode] || {}).Flag || '');
+        var abnormal = flag && flag !== 'N';
+        if (abnormal) anyAbn = true;
+        for (var k2 = 0; k2 < 5; k2++) {
+          var ce = row.getCell(k2);
+          if (i === 0) ce.setWidth(contentW * widths[k2]);
+          var vp = blankMM > 0 ? 0.5 : pd(isHead ? 4 : 3);   // chừa trống → đệm dòng tối thiểu
+          PrintService.cellAttrs_(ce, vp, 4, isHead ? C.primary : (i % 2 === 0 ? '#F7FAFB' : null));
+          var color = isHead ? '#FFFFFF' : (k2 === 2 && abnormal ? C.high : ((k2 === 0 || k2 === 3) ? C.muted : C.text));
+          PrintService.styleText_(ce.getChild(0).asParagraph(), isHead ? fs(8) : (k2 === 4 ? fs(8.5) : fs(9.5)), isHead || k2 === 1 || k2 === 2, color,
+            (k2 === 0 || k2 === 2 || k2 === 3) ? DocumentApp.HorizontalAlignment.CENTER : null);
+        }
       }
     }
     if (anyAbn && !(blankMM > 0)) {   // bản gọn: chú thích "In đậm đỏ" gộp vào dòng cuối phiếu

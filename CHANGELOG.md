@@ -4,6 +4,10 @@ Số phiên bản hiện ở màn đăng nhập và góc dưới thanh bên. N�
 
 Khi cập nhật: tăng `APP.VERSION` (backend/00_Config.gs) và `App.FE_VERSION` (assets/app.js) cùng số, ghi thêm 1 mục ở đây.
 
+## v2.3.3 (2026-11-28) — Phiếu chừa trống không chỉ số → bỏ bảng
+- Nhóm có "Chừa trống cho máy XN": nếu phiếu không chọn / chưa có chỉ số nào thì không in bảng kết quả (không còn dòng tiêu đề + "(Chưa có kết quả)"); chỉ còn đầu phiếu, vùng trống và chân phiếu. Áp dụng cả In nhanh và Xuất PDF.
+- Nhóm in thường (không chừa trống) giữ nguyên dòng "(Chưa có kết quả)".
+
 ## v2.3.2 (2026-11-26) — Thời gian trả KQ có số lẻ
 - TB trả KQ / Trung vị (Thống kê, Việc của tôi): hiện 2 số lẻ kiểu Việt Nam (VD 0,58 giờ); di chuột xem "0 giờ 35 phút".
 - Tính trên thời gian thực từng phiếu (trước đây mỗi phiếu đã làm tròn 0,1 giờ → phiếu trả nhanh thành 0). Trung vị với số phiếu chẵn = trung bình 2 giá trị giữa.

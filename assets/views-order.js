@@ -928,8 +928,9 @@
           '<span class="sp"></span>Giới tính: <b>' + esc(o.Gender || '') + '</b></td></tr>' +
           '<tr><td>Mã BN: <b class="mono">' + esc(o.PatientID) + '</b></td><td>Ngày khám: <b>' + U.vnDate(o.OrderDate) + '</b></td></tr>' +
           '<tr><td>Địa chỉ: ' + esc(o.Address || '') + '</td><td>BS chỉ định: ' + esc(o.DoctorName || '') + '</td></tr></table>') +
-        '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
-          rowsHtml + '</tbody></table>' +
+        // Phiếu chừa trống mà không chọn/không có chỉ số nào → bỏ hẳn bảng (máy XN in kết quả vào vùng trống)
+        (blank > 0 && !tests.length ? '' : '<table class="res"><thead><tr><th style="width:7%">STT</th><th style="width:37%">XÉT NGHIỆM</th><th style="width:17%">KẾT QUẢ</th><th style="width:13%">ĐƠN VỊ</th><th>KHOẢNG THAM CHIẾU</th></tr></thead><tbody>' +
+          rowsHtml + '</tbody></table>') +
         (anyAbn && !blank ? '<div class="legend"><b class="ab">In đậm đỏ</b>: ngoài khoảng tham chiếu (↑ cao hơn · ↓ thấp hơn)</div>' : '') +
         '<table class="foot"><tr><td class="fl">' + (o.FollowUpDate ? 'Hẹn tái khám: <b>' + U.vnDate(o.FollowUpDate) + '</b>' : '') +
           (p.PrintNote ? '<div class="pnote">' + String(p.PrintNote).split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</div>' : '') + '</td>' +

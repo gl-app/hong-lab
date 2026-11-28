@@ -189,7 +189,7 @@
     return { dbs: list.length, total: ys.length, names: list.map(function (r) { return r.Note || ('DB_' + r.Year); }),
              off: off.map(function (r) { return r.Note || ('DB_' + r.Year); }) };
   };
-  App.FE_VERSION = '2.3.2';
+  App.FE_VERSION = '2.3.3';
   /** Giờ có 2 số lẻ kiểu VN (0,58 giờ); di chuột xem giờ:phút. plain = chỉ chữ (không thẻ HTML). */
   App.fmtHours = function (v, plain) {
     if (v === null || v === undefined || v === '') return '—';
